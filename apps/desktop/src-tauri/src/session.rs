@@ -1414,15 +1414,29 @@ impl SessionManager {
         self.sessions.lock().await.get(session_id).and_then(|s| s.child.id())
     }
 
+    /// Stops what a session has running and nothing else: the child with
+    /// everything it started, and its browser tabs. Log and index entry stay,
+    /// so an unsettle resumes as any idle session does. Settle and delete both
+    /// come through here — settling is the reader saying the work is done,
+    /// and a child left running behind a settled row was a dev server and a
+    /// page nobody could see.
+    pub async fn settle(&self, session_id: &str) -> Result<()> {
+        let running = self.sessions.lock().await.remove(session_id);
+        // The tabs close whatever the kill answered: the session is already
+        // out of the map, so nothing would come back to close them.
+        let killed = match running {
+            Some(session) => session.kill_tree().await,
+            None => Ok(()),
+        };
+        #[cfg(all(feature = "cef", target_os = "macos"))]
+        crate::cef::close_session(session_id);
+        killed
+    }
+
     /// The child goes first and its lock is released before the disk work, so a
     /// dying process can't append one last event to a file we just removed.
     pub async fn delete(&self, session_id: &str) -> Result<bool> {
-        let running = self.sessions.lock().await.remove(session_id);
-        if let Some(session) = running {
-            session.kill().await?;
-        }
-        #[cfg(all(feature = "cef", target_os = "macos"))]
-        crate::cef::close_session(session_id);
+        self.settle(session_id).await?;
 
         // Best-effort for the same reason the attachments below are, and with
         // one cost worth naming: a removal that fails here orphans the tree
@@ -2227,6 +2241,31 @@ impl Session {
 
         let _ = self.child.kill().await?;
         Ok(())
+    }
+
+    /// [`kill`](Self::kill), then everything the child had started — a
+    /// background Bash, a dev server. `kill` alone signals the agent's own pid,
+    /// so those were orphaned and kept running under launchd. Only delete and
+    /// settle take this route: a respawn wants the dev server to survive it.
+    ///
+    /// The descendants go *before* the parent, and straight off the walk. A
+    /// dead parent's children are reparented and the walk can no longer find
+    /// them; and a pid held across the parent's shutdown could belong to
+    /// some other process by the time it is signalled. Signalled while the
+    /// parent lives, a pid the walk just found is still its child. Cost:
+    /// anything spawned during a pi or fx graceful exit is missed.
+    pub async fn kill_tree(self) -> Result<()> {
+        if let Some(root) = self.child.id() {
+            let tree = tokio::task::spawn_blocking(move || crate::local_servers::descendants(root))
+                .await
+                .unwrap_or_default();
+            for pid in tree.into_iter().filter(|&p| p != root) {
+                // ponytail: a process group set at spawn would make this one
+                // signal with no walk; four spawn sites to change if this bites.
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            }
+        }
+        self.kill().await
     }
 }
 

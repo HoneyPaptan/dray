@@ -515,6 +515,8 @@ Order is load-bearing at both ends: unlock before remove because the lock refuse
 
 **Already-gone trees ask nothing** — disposition is read *before* deciding whether to ask. **Delete takes the tree with it, no second question**, folded into `SessionManager::delete` best-effort; a failed removal there orphans the tree, and `git worktree remove` by hand is the recovery.
 
+**Settle and delete both stop the session, and the stop is the whole process tree** (`SessionManager::settle`): the child, everything it started, and its browser tabs. `child.kill()` alone signals the agent's pid, so a `run_in_background` Bash or a dev server survived a delete under launchd. The descendants are read with `local_servers::descendants` and signalled **before** the child dies, straight off the walk: a dead parent's children are reparented and the walk loses them, and a pid held across the parent's shutdown could be another process's by the time it is signalled. Tabs close whatever the kill answered. A respawn keeps `kill` alone: the dev server should survive an effort change. Settle is refused mid-turn by the sidebar for this reason. The log and index entry stay, and unsettle resumes as any idle session does.
+
 ## Orchestration
 
 **One agent can fan work out into several sessions**, each with its own worktree and sidebar row. Three commands: create, list, send.
