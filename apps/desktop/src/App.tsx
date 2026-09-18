@@ -135,7 +135,8 @@ function App() {
     sessionIndexItems,
     statusBySession,
     askingSessions,
-    showArchived,
+    archivedShown,
+    archivedRequested,
     setShowArchived,
     models,
     refreshModels,
@@ -685,8 +686,8 @@ function App() {
   // already fetched still draw over there, since the cache outlives this — what
   // is dropped is the spending, not the answer.
   const repoPaths = useMemo(
-    () => (showArchived ? [] : [...new Set(visibleSessions.map((i) => i.projectPath))]),
-    [showArchived, visibleSessions],
+    () => (archivedShown ? [] : [...new Set(visibleSessions.map((i) => i.projectPath))]),
+    [archivedShown, visibleSessions],
   );
   const prMarks = usePrMarks(repoPaths);
 
@@ -983,11 +984,11 @@ function App() {
         projects,
         // The same reading the sidebar groups by, and withheld on the same list
         // — the walk has to step the runs the eye is looking at.
-        showArchived ? undefined : { statusBySession, asking: askingSessions },
-        showArchived,
-        showArchived ? [] : spaceGroups,
+        archivedShown ? undefined : { statusBySession, asking: askingSessions },
+        archivedShown,
+        archivedShown ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, showArchived, statusBySession, askingSessions, spaceGroups],
+    [searchedSessions, projects, archivedShown, statusBySession, askingSessions, spaceGroups],
   );
 
   // Wraps downward only. Falling off the bottom returns to the newest session,
@@ -1024,11 +1025,11 @@ function App() {
       sessionUnits(
         searchedSessions,
         projects,
-        showArchived ? undefined : { statusBySession, asking: askingSessions },
-        showArchived,
-        showArchived ? [] : spaceGroups,
+        archivedShown ? undefined : { statusBySession, asking: askingSessions },
+        archivedShown,
+        archivedShown ? [] : spaceGroups,
       ),
-    [searchedSessions, projects, showArchived, statusBySession, askingSessions, spaceGroups],
+    [searchedSessions, projects, archivedShown, statusBySession, askingSessions, spaceGroups],
   );
   const stepGroup = (delta: number) => stepThrough(units, delta);
 
@@ -1681,7 +1682,8 @@ function App() {
           onFork={forkSession}
           onDelete={deleteSession}
           onMarkUnread={markSessionUnread}
-          showArchived={showArchived}
+          archivedShown={archivedShown}
+          archivedRequested={archivedRequested}
           onToggleArchived={() => setShowArchived((v) => !v)}
           updateStatus={updateStatus}
           updateBlocked={anyRunning}

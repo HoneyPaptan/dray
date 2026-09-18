@@ -126,7 +126,21 @@ type SidebarProps = {
   /// Puts the unread mark back on a session the reader has already read, so it
   /// rejoins the Completed run.
   onMarkUnread: (sessionId: string) => void;
-  showArchived: boolean;
+  /// Which side the rows handed down are from — the side the index was read
+  /// for, never the side the toggle was last pressed to. The two differ for the
+  /// length of a fetch, and drawing this list by the other one's rules re-keys
+  /// almost every row into a run that did not exist: see `archivedShown` in
+  /// [`useSessions`].
+  archivedShown: boolean;
+  /// What the toggle has been set *to*, which moves on the press where
+  /// `archivedShown` waits for the read that follows it.
+  ///
+  /// The toggle's own glyph and label are the only things that read it, and
+  /// they have to: the list cannot move until its rows arrive, so with the
+  /// control waiting too a press changed nothing on screen for the length of a
+  /// fetch and a 499-row mount, which reads as a press that did not register.
+  /// Anything else reading it is the remount `archivedShown` exists to avoid.
+  archivedRequested: boolean;
   onToggleArchived: () => void;
   /// Already narrowed to the active space by the caller, like `items` — so
   /// everything below reads one list and the filter, the headings and the rows
@@ -860,7 +874,8 @@ export default function Sidebar({
   onFork,
   onDelete,
   onMarkUnread,
-  showArchived,
+  archivedShown,
+  archivedRequested,
   onToggleArchived,
   projects,
   spaces,
@@ -909,15 +924,15 @@ export default function Sidebar({
   // reading and comes back as one run per project — see [`LiveSessions`].
   const live = useMemo(
     () =>
-      showArchived
+      archivedShown
         ? undefined
         : { statusBySession, asking: askingSessions },
-    [showArchived, statusBySession, askingSessions],
+    [archivedShown, statusBySession, askingSessions],
   );
   // No split runs in the settled list, for the reason it draws no Pinned group.
   const groups = useMemo(
-    () => sessionGroups(items, projects, live, showArchived, showArchived ? [] : splits),
-    [items, projects, live, showArchived, splits],
+    () => sessionGroups(items, projects, live, archivedShown, archivedShown ? [] : splits),
+    [items, projects, live, archivedShown, splits],
   );
   const rowCount = useMemo(
     () => groups.reduce((n, group) => n + group.rows.length, 0),
@@ -930,15 +945,23 @@ export default function Sidebar({
   // worklist and stays whole. Paging the read itself would buy nothing: the
   // index is one file parsed whole however few entries are asked for.
   const [settledLimit, setSettledLimit] = useState(SETTLED_STEP);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Reset on the press, not on the rows landing: the request moves first, so
+  // the window is already at its first step by the time the settled rows
+  // arrive, and the read's commit draws one step rather than wherever the
+  // reader last scrolled to and then a second commit at the step. The scroll
+  // offset goes with it, or a shorter list opens clamped to its bottom edge
+  // and the observer there opens the next step at once.
   useEffect(() => {
     setSettledLimit(SETTLED_STEP);
-  }, [showArchived, search, projectFilter, space]);
+    listRef.current?.scrollTo({ top: 0 });
+  }, [archivedRequested, search, projectFilter, space]);
 
   // ⌘⇧↑/↓ steps every row the walk knows about, drawn or not, so a step past
   // the window opens it far enough to draw what it landed on — otherwise the
   // selection moves with nothing in the sidebar saying where to.
   useEffect(() => {
-    if (!showArchived || !selectedSessionId) return;
+    if (!archivedShown || !selectedSessionId) return;
     let n = 0;
     for (const group of groups) {
       for (const row of group.rows) {
@@ -950,11 +973,11 @@ export default function Sidebar({
         n += 1;
       }
     }
-  }, [showArchived, selectedSessionId, groups, settledLimit]);
+  }, [archivedShown, selectedSessionId, groups, settledLimit]);
 
   // A prefix of `groups`, so `groupKeys` still indexes by position.
   const drawn = useMemo(() => {
-    if (!showArchived || rowCount <= settledLimit) return groups;
+    if (!archivedShown || rowCount <= settledLimit) return groups;
     let left = settledLimit;
     const out: SessionGroup[] = [];
     for (const group of groups) {
@@ -963,8 +986,8 @@ export default function Sidebar({
       left -= group.rows.length;
     }
     return out;
-  }, [groups, showArchived, settledLimit, rowCount]);
-  const more = showArchived && rowCount > settledLimit;
+  }, [groups, archivedShown, settledLimit, rowCount]);
+  const more = archivedShown && rowCount > settledLimit;
 
   // A window the list does not overflow fires no scroll event, so scrolling
   // alone strands every row past the first step on a tall screen — and on a
@@ -972,7 +995,6 @@ export default function Sidebar({
   // the question is asked again. The observer asks it at every size the list is
   // drawn at, and `settledLimit` in the deps is what lets one step follow
   // another until the list overflows or runs out.
-  const listRef = useRef<HTMLDivElement>(null);
   const openMore = () => {
     const el = listRef.current;
     if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 240)
@@ -1020,14 +1042,14 @@ export default function Sidebar({
   const emptyText = search.trim()
     ? `No tasks matching "${search.trim()}".`
     : projectFilter
-      ? showArchived
+      ? archivedShown
         ? "Nothing settled in this project."
         : "No tasks in this project."
       : space
-        ? showArchived
+        ? archivedShown
           ? `Nothing settled in ${space}.`
           : `No tasks in ${space}.`
-        : showArchived
+        : archivedShown
           ? "Nothing settled yet."
           : "No tasks yet.";
 
@@ -1211,15 +1233,15 @@ export default function Sidebar({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label={showArchived ? "Show active" : "Show settled"}
+                aria-label={archivedRequested ? "Show active" : "Show settled"}
                 onClick={onToggleArchived}
                 className="text-muted-foreground hover:text-foreground"
               >
-                {showArchived ? <Undo2 /> : <CheckCheck />}
+                {archivedRequested ? <Undo2 /> : <CheckCheck />}
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {showArchived ? "Show active" : "Show settled"}
+              {archivedRequested ? "Show active" : "Show settled"}
             </TooltipContent>
           </Tooltip>
         </div>
@@ -1317,12 +1339,12 @@ export default function Sidebar({
                     // "what did I finish today" — so everything older is held back
                     // rather than filtered out. Only there: the active list is a
                     // worklist, where an older row is still open work.
-                    faded={showArchived && !isToday(item.modified)}
+                    faded={archivedShown && !isToday(item.modified)}
                     // Nothing refreshes marks over here: the archived view asks for
                     // no repos, so its rows draw from a cache nothing will update.
                     // A stale glyph is the accepted trade; a stale *spinner* is not,
                     // since it animates a claim that something is happening now.
-                    marksLive={!showArchived}
+                    marksLive={!archivedShown}
                     nested={isNested(item, items)}
                     // A row drawn under Pinned below the top is there because
                     // its parent is — `splitPinned` only carries a nest whole.
@@ -1336,7 +1358,7 @@ export default function Sidebar({
                     }
                     onSelect={onSelect}
                     onDragStart={
-                      onDropSession && !showArchived
+                      onDropSession && !archivedShown
                         ? (e) => startSessionDrag(e, item.sessionId, item.title, onDropSession)
                         : undefined
                     }
@@ -1360,8 +1382,8 @@ export default function Sidebar({
         {rowCount > 1 && !more && (
           <ShortcutHint
             selected={selectedSessionId !== null}
-            grouped={!showArchived && splits.length > 0}
-            splittable={!!onDropSession && !showArchived && !splitLearned}
+            grouped={!archivedShown && splits.length > 0}
+            splittable={!!onDropSession && !archivedShown && !splitLearned}
           />
         )}
       </div>
