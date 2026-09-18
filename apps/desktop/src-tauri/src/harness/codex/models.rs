@@ -13,8 +13,8 @@
 //! in it would be a worse answer than a slightly old one.
 
 use super::probe;
-use crate::harness::ProbeCache;
-use crate::models::{codex_models, every_codex_model, Effort, Model, ModelId};
+use crate::harness::{Harness, ProbeCache};
+use crate::models::{codex_models, default_model_for, every_codex_model, Effort, Model, ModelId};
 use anyhow::{bail, Result};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -32,8 +32,8 @@ static CACHE: LazyLock<ProbeCache<Vec<Model>>> = LazyLock::new(|| ProbeCache::ne
 ///
 /// Also exactly what Shift+Tab cycles, so it is a budget rather than a taste:
 /// the chord is only worth pressing while the list it walks is short. Taken by
-/// position because Codex lists its own newest first — so a new flagship lands
-/// at the top of the cycle the day it ships, which is the whole point of asking.
+/// position, over the order [`fold`] ranks — never the wire's, which is Codex's
+/// own recommendation rather than its newest.
 const TOP_LEVEL: usize = 2;
 
 /// Every model Codex reports, newest answer or a cached one.
@@ -101,19 +101,29 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
     })
 }
 
-/// The model a Codex session starts on when nobody picked one: the list's own
-/// first row, which is Codex's newest.
+/// The model a Codex session starts on when nobody picked one: the table's
+/// default where the installed Codex lists it, its first row otherwise.
 ///
-/// Asked rather than named, because the table's default is a model this build
-/// knows and the *installed* Codex may not — `gpt6_astra` seeded onto a CLI
-/// predating Astra is a create that fails at the spawn for a choice nobody
-/// made. A probe that cannot run falls back to the table through [`list`], so
-/// the old answer is still the answer where there is nothing better.
+/// **Named, then checked — never the list's first row alone.** It was that row,
+/// and reading it survived only while the list arrived in the wire's order:
+/// [`fold`] now ranks the picker itself, so the same read moved the *creation*
+/// default onto whichever model this build would draw first, and onto any model
+/// it has never heard of. A `dray new` naming no model would have changed
+/// generation under the reader with nothing on screen saying so.
+///
+/// The check is what the old reading was really buying, and it is kept: the
+/// table's default is a model this build knows and the *installed* Codex may
+/// not, and one it does not list is a create that fails at the spawn for a
+/// choice nobody made. So it is taken only where Codex answers for it, and the
+/// list's own first row stands in otherwise — a probe that cannot run falls
+/// back to the table through [`list`], so the old answer is still the answer
+/// where there is nothing better.
 pub async fn default_model() -> ModelId {
-    list()
-        .await
-        .first()
-        .map(|m| m.id.clone())
+    let models = list().await;
+
+    default_model_for(Harness::Codex)
+        .filter(|id| models.iter().any(|m| &m.id == id))
+        .or_else(|| models.first().map(|m| m.id.clone()))
         .unwrap_or_default()
 }
 
@@ -250,12 +260,40 @@ fn read_page(answer: &Value) -> Option<Page> {
 ///
 /// Tier is counted across the whole list rather than per page, or a second page
 /// would start its own top level and put four rows in a two-row cycle.
+///
+/// **The wire's order is not the tier, measured.** Codex answers `gpt-5.6-sol`
+/// ahead of `gpt-6-astra` — its own recommendation first, not its newest — so
+/// reading position as rank put last generation's flagship at the top of the
+/// picker and of ⇧⇥'s cycle. A model this build *names* therefore takes
+/// [`codex_models`]'s order, which is Dray's own answer to which it would put
+/// first, and one it has never heard of **leads**: a model no table here holds
+/// is the new one, and having it top the picker the day it ships is what
+/// reading the list was for. Stable, so several unknowns keep the wire's
+/// order among themselves.
 fn fold(rows: Vec<Row>) -> Vec<Model> {
-    rows.iter()
+    let table = codex_models();
+    let mut models: Vec<Model> = rows
+        .iter()
         .filter(|row| !row.hidden && !row.id.is_empty())
-        .enumerate()
-        .map(|(at, row)| row_to_model(row, at))
-        .collect()
+        .map(row_to_model)
+        .collect();
+
+    models.sort_by_key(|model| {
+        match table.iter().position(|known| known.id == model.id) {
+            Some(at) => at as i64,
+            // Named by `every_codex_model` alone is a generation the picker
+            // retired, still runnable and still answerable by Codex: it sinks
+            // rather than leads, or "unknown here" would promote last year's.
+            None if every_codex_model().iter().any(|m| m.id == model.id) => i64::MAX,
+            None => -1,
+        }
+    });
+
+    for (at, model) in models.iter_mut().enumerate() {
+        model.secondary = at >= TOP_LEVEL;
+    }
+
+    models
 }
 
 /// One page, for a caller that has the whole answer in hand — the tests.
@@ -272,7 +310,9 @@ fn read_rows(answer: &Value) -> Vec<Model> {
 /// would read as unknown and the composer would move it to the default. So a
 /// row Dray already knows keeps the table's id and label, and only a model this
 /// build has never heard of is minted from the wire.
-fn row_to_model(row: &Row, at: usize) -> Model {
+/// Tier is left to [`fold`], which is the only place that knows a row's final
+/// position — the wire's own is not it.
+fn row_to_model(row: &Row) -> Model {
     let known = every_codex_model().into_iter().find(|m| m.arg == row.id);
     let efforts = ladder(row);
 
@@ -291,7 +331,7 @@ fn row_to_model(row: &Row, at: usize) -> Model {
         // One vendor, so there is nothing for the picker to group by.
         provider: String::new(),
         accepts_images: accepts_images(row),
-        secondary: at >= TOP_LEVEL,
+        secondary: false,
         supports_fast: supports_fast(row),
     }
 }
@@ -443,6 +483,25 @@ mod tests {
 
         assert_eq!(cycled, ["Astra", "Sol"]);
         assert!(models.iter().filter(|m| m.secondary).count() >= 2);
+    }
+
+    /// The wire's order is Codex's own recommendation, measured: `model/list`
+    /// answers Sol ahead of Astra. Read as rank it put last generation's
+    /// flagship at the top of the picker and of ⇧⇥'s cycle, so the order is
+    /// this build's — except for a model it has never heard of, which is the
+    /// new one and leads, and a generation the picker retired, which sinks.
+    #[test]
+    fn the_order_is_drays_own_and_a_new_model_still_leads() {
+        let wire = json!({"data": [
+            {"id": "gpt-5.6-sol"},
+            {"id": "gpt-5.5"},
+            {"id": "gpt-6-astra"},
+            {"id": "gpt-7-nova"},
+        ]});
+
+        let labels: Vec<String> = read_rows(&wire).into_iter().map(|m| m.label).collect();
+
+        assert_eq!(labels, ["gpt-7-nova", "Astra", "Sol", "GPT-5.5"]);
     }
 
     /// `ultra` is per model and Codex says which: Sol reports it, Luna stops at
