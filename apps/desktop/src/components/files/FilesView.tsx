@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import {
   PanelLeft,
   PanelLeftClose,
@@ -89,6 +89,16 @@ export default function FilesView({
     floor: VIEWER_MIN,
   });
 
+  // Arriving on the view puts the caret in the search box, since searching is
+  // what the reader came for more often than walking the tree — and the tree is
+  // one Escape away. The ref lives up here rather than in `Filter`, which
+  // unmounts with the list: a `useEffect` down there re-fires on every reopen
+  // and takes focus off the button that did the reopening.
+  const box = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (active) box.current?.focus();
+  }, [active]);
+
   const [query, setQuery] = useState("");
   const filtering = query.trim().length > 0;
   const matches = useFileSearch(cwd, filtering ? query : null);
@@ -153,6 +163,7 @@ export default function FilesView({
       style={style}
     >
       <Filter
+        box={box}
         query={query}
         onQuery={(next) => {
           setQuery(next);
@@ -252,6 +263,7 @@ export default function FilesView({
 /// and already watched — and an empty box draws the *tree*, since that is what
 /// an empty filter means here rather than a ranked list of everything.
 function Filter({
+  box,
   query,
   onQuery,
   matches,
@@ -262,6 +274,7 @@ function Filter({
   onSide,
   onShown,
 }: {
+  box: RefObject<HTMLInputElement | null>;
   query: string;
   onQuery: (next: string) => void;
   matches: readonly { path: string }[];
@@ -280,6 +293,7 @@ function Filter({
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
         <Search className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={1.5} />
         <input
+          ref={box}
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           onKeyDown={(e) => {
