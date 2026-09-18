@@ -5,6 +5,47 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.21.0
+
+### Added
+
+- **Mention another session from the composer with `&`.** A fourth
+  picker beside `@`, `#` and `/`. A pick writes the session's title and
+  its id, so an agent handed the message has the address to `dray send`
+  to rather than a title to go looking for. Two sessions sharing a
+  title trail their branch, so you can tell them apart.
+- **Each project filter remembers what you had open.** A filter is a
+  place you work in, so narrowing to a project no longer leaves a
+  session from somewhere else selected, and applying a filter points
+  the composer at that project. The arrow keys step the filter.
+- **Mark a session unread from its row menu.** A session you have
+  already looked at can go back to Completed.
+- **Stop all in the subagent panel.** Background tasks an agent left
+  running end in one press instead of one at a time.
+
+### Changed
+
+- **fx's provider sits on the agent row as marks.** Both controls now
+  fit on one track rather than provider taking a well of its own, and
+  each provider opens with a shortlist you can pick from.
+- **The Files view opens with the search box focused.** The tree is one
+  Escape away.
+
+### Fixed
+
+- **Settling or deleting a session stops everything it started.** A dev
+  server or background command an agent launched kept running — and
+  settling stopped nothing at all, agent included.
+- **Subagent rows no longer shimmer forever.** A run whose task is gone
+  now closes instead of sitting there with a Stop button for the rest
+  of the session.
+- **Switching to the settled list is quick again, and opens as you
+  scroll.** A long history mounted every row at once and the press
+  itself took a moment to register; both are gone.
+- **A new Codex session keeps the model it always used.** Ranking the
+  model picker had quietly moved the default for sessions created with
+  no model named.
+
 ## 0.20.6
 
 ### Added
