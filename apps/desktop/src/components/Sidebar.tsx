@@ -3,6 +3,7 @@ import {
   Check,
   CheckCheck,
   ChevronDown,
+  Circle,
   CircleDashed,
   CircleDot,
   GitBranchPlus,
@@ -122,6 +123,9 @@ type SidebarProps = {
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
+  /// Puts the unread mark back on a session the reader has already read, so it
+  /// rejoins the Completed run.
+  onMarkUnread: (sessionId: string) => void;
   showArchived: boolean;
   onToggleArchived: () => void;
   /// Already narrowed to the active space by the caller, like `items` — so
@@ -855,6 +859,7 @@ export default function Sidebar({
   onSetFlags,
   onFork,
   onDelete,
+  onMarkUnread,
   showArchived,
   onToggleArchived,
   projects,
@@ -1339,6 +1344,7 @@ export default function Sidebar({
                     onFork={onFork}
                     onDelete={onDelete}
                     onDetach={onDetach}
+                    onMarkUnread={onMarkUnread}
                   />
                 ))}
               </Fragment>
@@ -1789,6 +1795,7 @@ function RowMenu({
   forkDisabled,
   onDelete,
   onDetach,
+  onMarkUnread,
   children,
 }: {
   onFork: (worktree: boolean) => void;
@@ -1803,6 +1810,10 @@ function RowMenu({
   /// a disabled item on every row in the list would be noise rather than a
   /// promise of something coming.
   onDetach?: () => void;
+  /// Absent where the mark would say nothing: a settled session is a history
+  /// row with no Completed run to rejoin, and one already unread or mid-turn
+  /// has nothing to take back.
+  onMarkUnread?: () => void;
   children: React.ReactNode;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -1822,9 +1833,11 @@ function RowMenu({
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
 
       {/* Portaled, so a click in here never reaches the row's select handler. */}
-      {/* Wide enough for the confirm step's two buttons, which is the widest
-          thing this menu ever holds — the width is fixed rather than fitted so
-          the frame doesn't resize under the cursor when Delete swaps them in. */}
+      {/* Fixed rather than fitted, so the frame doesn't resize under the cursor
+          when Delete swaps the confirm step in. Set by the longest row it draws
+          — 'Detach from parent', not the confirm buttons, which answer a
+          question the heading above them has already asked and are one word
+          each because of it. */}
       {/*
           The digit listener lives up here rather than on the sub's own content:
           `SubContent` renders through a portal, so a handler placed there only
@@ -1835,7 +1848,7 @@ function RowMenu({
           the two elements the key lands on.
       */}
       <ContextMenuContent
-        className="w-48"
+        className="w-40"
         onKeyDown={(e) => {
           if (!forkOpen) return;
           const picked = forkRefs.current[Number(e.key) - 1];
@@ -1866,7 +1879,7 @@ function RowMenu({
                 onSelect={onDelete}
                 className="flex-1 justify-center bg-destructive/10 text-ui"
               >
-                Yes, Delete
+                Delete
               </ContextMenuItem>
             </div>
           </>
@@ -1903,6 +1916,13 @@ function RowMenu({
                 ))}
               </ContextMenuSubContent>
             </ContextMenuSub>
+
+            {onMarkUnread && (
+              <ContextMenuItem className="text-ui" onSelect={onMarkUnread}>
+                <Circle />
+                Mark unread
+              </ContextMenuItem>
+            )}
 
             {onDetach && (
               <ContextMenuItem className="text-ui" onSelect={onDetach}>
@@ -1957,6 +1977,7 @@ function SessionRow({
   onFork,
   onDelete,
   onDetach,
+  onMarkUnread,
 }: {
   item: SessionIndexItem;
   /// Levels below the top; 0 draws no connector at all. See [`sessionRows`] —
@@ -1996,6 +2017,7 @@ function SessionRow({
   onFork: (sessionId: string, worktree: boolean) => Promise<void>;
   onDelete: (sessionId: string) => Promise<void>;
   onDetach: (sessionId: string) => Promise<void>;
+  onMarkUnread: (sessionId: string) => void;
 }) {
   // The keyboard shortcut can walk the selection past the fold, and `nearest`
   // means a row selected by click — already in view — doesn't scroll at all.
@@ -2015,6 +2037,23 @@ function SessionRow({
       forkDisabled={status === "in_progress"}
       onDelete={() => void onDelete(item.sessionId)}
       onDetach={nested ? () => void onDetach(item.sessionId) : undefined}
+      // Only a read, finished session can take the mark back: a settled one
+      // has left the live list the Completed run lives in, and anything but
+      // `idle` is either already unread or still working.
+      //
+      // `forkFrom` is the third: a fork is lazy, so its row sits at `idle`
+      // holding a copied conversation the CLI has not carried out yet and no
+      // turn of its own. An unread mark there would put a session that has
+      // never run into the Completed run and onto the dock badge. The flag is
+      // cleared by the first send, which is also the first turn there is
+      // anything to read. Known ceiling: a session whose spawn failed outright
+      // sits at `idle` having run nothing either, and the index says nothing
+      // that tells it from one that has run and been read.
+      onMarkUnread={
+        status === "idle" && !item.archived && !item.forkFrom
+          ? () => onMarkUnread(item.sessionId)
+          : undefined
+      }
     >
       {/* A button can't nest a button, so the row is a div with a click handler
           and the pin/settle controls are the only real buttons inside it. */}
