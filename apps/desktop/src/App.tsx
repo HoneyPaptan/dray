@@ -1145,6 +1145,11 @@ function App() {
   /// could account for.
   const changeSpace = (next: string | null) => {
     setStoredSpace(next);
+    // Resetting the filter is leaving it, so its pick is recorded here too —
+    // without this a space switch is the one way out of a filter that forgets
+    // what was open in it. Nothing is restored: the effect below closes a
+    // transcript that falls outside the space being entered.
+    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
     setProjectFilter(null);
 
     for (const notice of getNotices()) {
@@ -1156,6 +1161,59 @@ function App() {
         dismissNotice(notice.sessionId, notice.kind);
       }
     }
+  };
+
+  /// What was selected the last time each project filter was up, keyed by the
+  /// filter's own value (`""` for All Projects).
+  ///
+  /// A filter is a place the reader works in, not a view of one list: a session
+  /// picked while looking at everything is not the session they left open in a
+  /// project, so coming back to a filter has to come back to its own pick.
+  ///
+  /// In memory only, where the filter itself is persisted — a remembered id
+  /// from a previous run would open a transcript nobody asked for on the first
+  /// switch after launch, so the entry is written on the way out of a filter
+  /// and nowhere else.
+  const filterSelection = useRef<Record<string, string | null>>({});
+
+  /// Drops a session from every filter's memory, so a filter cannot reopen a
+  /// transcript the reader has just put away.
+  ///
+  /// Settling alone calls it. A deleted session is gone from the index, which
+  /// is what `changeProjectFilter` judges a remembered id against — so delete
+  /// needs nothing here, and calling it there would only lose the memory on a
+  /// delete that *failed*.
+  const forgetFilterSelection = (sessionId: string) => {
+    for (const key of Object.keys(filterSelection.current)) {
+      if (filterSelection.current[key] === sessionId) filterSelection.current[key] = null;
+    }
+  };
+
+  /// Moves the sidebar's scope, and takes the selection and the composer with it.
+  ///
+  /// The composer follows because a new task started while looking at one
+  /// project belongs to that project — All Projects names none, so it leaves
+  /// the pick where it is rather than clearing it.
+  ///
+  /// A remembered session is only restored where the list still holds it under
+  /// the new filter: it can have been settled, deleted, or moved out of the
+  /// space since, and the empty composer is the right answer for all three.
+  const changeProjectFilter = (next: string | null) => {
+    if (next === projectFilter) return;
+    filterSelection.current[projectFilter ?? ""] = selectedSessionId;
+    setProjectFilter(next);
+    if (next) handleSelectProject(next);
+
+    const remembered = filterSelection.current[next ?? ""] ?? null;
+    const restorable =
+      remembered &&
+      sessionIndexItems.some(
+        (i) => i.sessionId === remembered && (!next || i.projectPath === next),
+      );
+    goToSession(() => {
+      if (restorable) void handleSelectSessionIndexItem(remembered);
+      else handleNewSession();
+    });
   };
 
   /// Declares a space, and reports it only where one is actually made.
@@ -1291,6 +1349,7 @@ function App() {
     if (!(await setSessionFlags(sessionId, flags))) return;
 
     if (flags.archived === true) {
+      forgetFilterSelection(sessionId);
       playCelebration();
 
       // Settling is the reader saying this work is done, which is the
@@ -1364,6 +1423,23 @@ function App() {
       enabled: !selectedSessionId && !issuesOpen && spaceProjects.length > 1,
     },
   );
+  // Steps the sidebar's project filter, All Projects included, in the order the
+  // filter itself draws. Wraps, for the same reason the picker's own tap does:
+  // one key with a clamp dead-ends with no way back. Bound only where there is
+  // more than one entry to step between.
+  const stepProjectFilter = (delta: number) => {
+    const entries: (string | null)[] = [null, ...spaceProjects.map((p) => p.path)];
+    const from = entries.indexOf(projectFilter);
+    const at = from === -1 ? 0 : from;
+    changeProjectFilter(entries[(at + delta + entries.length) % entries.length]);
+  };
+  useHotkey("filter.prev", () => stepProjectFilter(-1), {
+    enabled: spaceProjects.length > 0,
+  });
+  useHotkey("filter.next", () => stepProjectFilter(1), {
+    enabled: spaceProjects.length > 0,
+  });
+
   // ⌘⇧ rather than plain ⌘: the composer is focused most of the time, where
   // ⌘↑/↓ is the webview's own jump-to-start/end of the input.
   useHotkey("session.prev", () => goToSession(() => stepSession(-1)));
@@ -1573,7 +1649,7 @@ function App() {
           // cancelled naming puts the switcher back on All Spaces by itself.
           namingSpace={settingsOpen && namingSpace}
           projectFilter={projectFilter}
-          onProjectFilterChange={setProjectFilter}
+          onProjectFilterChange={changeProjectFilter}
           statusBySession={statusBySession}
           askingSessions={askingSessions}
           prFor={prMarks.prFor}
