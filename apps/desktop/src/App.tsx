@@ -2182,6 +2182,10 @@ function App() {
       onInstallUpdate={installUpdate}
       updateChannel={updateChannel}
       onUpdateChannelChange={setUpdateChannel}
+      // Where the Accounts tab runs its probes and opens its terminal: the
+      // selected session's directory, the picked project otherwise. Empty is
+      // ordinary — a new task has no session yet.
+      cwd={composerCwd ?? ""}
     />
     <WorktreeDialog
       prompt={worktreePrompt}

@@ -10,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
@@ -45,6 +44,8 @@ import {
   OPEN_FILE_KEY,
   pickFileOpener,
 } from "@/lib/openWith";
+import AccountsSettings from "@/components/settings/AccountsSettings";
+import { SettingsHeaderSlot } from "@/components/settings/headerAction";
 import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
@@ -93,6 +94,7 @@ export default function SettingsDialog({
   onInstallUpdate,
   updateChannel,
   onUpdateChannelChange,
+  cwd,
 }: {
   open: boolean;
   onOpenChange: (next: boolean) => void;
@@ -127,6 +129,10 @@ export default function SettingsDialog({
   /// `useLocalStorage` here would write a value the checking effect never sees.
   updateChannel: UpdateChannel;
   onUpdateChannelChange: (next: UpdateChannel) => void;
+  /// Where the Accounts tab asks its questions: every probe runs here and the
+  /// login terminal opens here, since a CLI resolves its own config against the
+  /// directory it is started in.
+  cwd: string;
 }) {
   const { settings, setAnalyticsEnabled } = useAppSettings(open);
   const transcription = useTranscriptionSettings(open);
@@ -137,14 +143,16 @@ export default function SettingsDialog({
           dialog is described *by* — left unset, Radix warns about the missing
           `aria-describedby` and pointing it at a row would read that row's copy
           out as the dialog's purpose. */}
-      {/* Wider than the dialog default. That default is sized for a question and
-          two buttons; this holds prose, and at 25rem the analytics sentence broke
-          across three lines with two words on the last one. */}
-      <DialogContent aria-describedby={undefined} className="max-w-136">
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-        </DialogHeader>
+      {/* Wider than the dialog default, and wider again since the groups moved
+          to a rail: that default is sized for a question and two buttons, this
+          holds prose, and the rail now takes 8rem off the panel before the
+          prose starts. At 34rem with a rail the analytics sentence went back to
+          breaking over three lines, which is the measure the width was set by
+          in the first place.
 
+          `gap-0` because the title moved into the rail: the dialog holds one
+          child now, and the grid's own gap would be a band under nothing. */}
+      <DialogContent aria-describedby={undefined} className="max-w-176 gap-0">
         <SettingsTabs initialTab={initialTab}>
           {{
             appearance: (
@@ -172,6 +180,7 @@ export default function SettingsDialog({
                 onMoveSpace={onMoveSpace}
               />
             ),
+            accounts: <AccountsSettings cwd={cwd} />,
             transcription: (
               <TranscriptionSettings
                 status={transcription.status}
@@ -1041,6 +1050,7 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 const SETTINGS_TABS = [
   "appearance",
   "spaces",
+  "accounts",
   "transcription",
   "integrations",
   "shortcuts",
@@ -1055,6 +1065,7 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   spaces: "Spaces",
   transcription: "Transcription",
   integrations: "Integrations",
+  accounts: "Accounts",
   about: "About",
 };
 
@@ -1089,6 +1100,9 @@ function SettingsTabs({
   // open builds this fresh and the caller's tab is simply where it starts.
   // That is also what keeps "the pick resets on close" true.
   const [tab, setTab] = useState<SettingsTab>(initialTab);
+  // State rather than a ref, since a portal needs the node during render and a
+  // ref holds nothing on the first one.
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
 
   const index = SETTINGS_TABS.indexOf(tab);
   const { refs, onKeyDown } = useRovingGroup(SETTINGS_TABS.length, index, (next) =>
@@ -1096,33 +1110,48 @@ function SettingsTabs({
   );
 
   return (
-    <div className="flex flex-col gap-5">
-      <div
-        role="tablist"
-        aria-label="Settings"
-        onKeyDown={onKeyDown}
-        // Wraps rather than clips: six tabs fit the width today, and a seventh
-        // must show up on a second line, never past the edge.
-        className="flex flex-wrap items-center gap-0.5"
-      >
-        {SETTINGS_TABS.map((value, i) => (
-          <TabButton
-            key={value}
-            ref={(el) => {
-              refs.current[i] = el;
-            }}
-            role="tab"
-            id={`${id}-${value}`}
-            aria-selected={tab === value}
-            aria-controls={`${id}-panel`}
-            tabIndex={tab === value ? 0 : -1}
-            active={tab === value}
-            onClick={() => setTab(value)}
-            className="cursor-pointer"
-          >
-            {TAB_LABELS[value]}
-          </TabButton>
-        ))}
+    <div className="flex gap-5">
+      {/* A rail down the side, which reverses this dialog's first shape and the
+          reason is that the dialog moved. Tabs across the top were right at
+          28rem, where a rail would have taken a third of the width from prose
+          that was already breaking over three lines. At 34rem with seven groups
+          the row was the thing that broke instead — wrapping onto a second line,
+          which reads as two rows of tabs rather than one list — and a rail is a
+          column that grows down, where a row can only grow into the panel. */}
+      {/* The title heads the rail rather than the dialog, which is what closes
+          the empty band the header row used to be: a line spent on one word on
+          the left and the close cross on the right, with the groups starting
+          below all of it. Over the rail it names the list it sits on and the
+          panel starts at the top of the dialog. `px-2` is the tab buttons' own
+          padding, so the word lines up with the labels under it. */}
+      <div className="flex w-32 shrink-0 flex-col gap-3">
+        <DialogTitle className="px-2">Settings</DialogTitle>
+        <div
+          role="tablist"
+          aria-label="Settings"
+          aria-orientation="vertical"
+          onKeyDown={onKeyDown}
+          className="flex flex-col gap-0.5"
+        >
+          {SETTINGS_TABS.map((value, i) => (
+            <TabButton
+              key={value}
+              ref={(el) => {
+                refs.current[i] = el;
+              }}
+              role="tab"
+              id={`${id}-${value}`}
+              aria-selected={tab === value}
+              aria-controls={`${id}-panel`}
+              tabIndex={tab === value ? 0 : -1}
+              active={tab === value}
+              onClick={() => setTab(value)}
+              className="cursor-pointer text-left"
+            >
+              {TAB_LABELS[value]}
+            </TabButton>
+          ))}
+        </div>
       </div>
 
       {/* Fixed, and scrolling past it. A floor was enough while the tabs were
@@ -1136,19 +1165,48 @@ function SettingsTabs({
           The negative margin is for the model rows' focus ring: `overflow-y`
           clips the other axis too, so a ring drawn at the panel's own edge
           loses its outer edge without it. */}
-      <div
-        role="tabpanel"
-        id={`${id}-panel`}
-        aria-labelledby={`${id}-${tab}`}
-        // `shrink-0` on the sections, since a column flex item's default is to
-        // shrink toward its content before the container agrees to scroll.
-        // Capped against the viewport as well as fixed: the height is still
-        // one number for every tab, so nothing jumps on a switch, but a short
-        // window gets a dialog that fits inside it rather than one running off
-        // both ends.
-        className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
-      >
-        {children[tab]}
+      <div className="relative min-w-0 flex-1">
+        {/* A tab's own header action, drawn over the panel's top-right and
+            outside its scroll box — a control that scrolls away is one the
+            reader has to go looking for, and one drawn *in* the panel spends a
+            whole row on itself. `right-6` leaves the corner to the close cross,
+            which is absolute against the dialog and answers to nothing here.
+
+            `h-4` is that cross, and it is what the strip aligns to: a button
+            here is taller than the glyph it holds, so sat at `top-0` it hung
+            half a row below the cross it sits beside. The box is the cross's
+            own line and a taller child centres on it, overflowing both ways.
+
+            It spans the panel so a tab can put something at either end — a back
+            arrow leads, `mr-auto` and all, where an action follows — which is
+            why the strip itself takes no pointer events and its children take
+            them back: an empty 16px band over the panel would otherwise swallow
+            clicks meant for the first row under it. */}
+        <div
+          ref={setSlot}
+          className="pointer-events-none absolute top-0 right-6 left-0 z-10 flex h-4 items-center justify-end gap-1 [&>*]:pointer-events-auto"
+        />
+
+        <div
+          role="tabpanel"
+          id={`${id}-panel`}
+          aria-labelledby={`${id}-${tab}`}
+          // `shrink-0` on the sections, since a column flex item's default is to
+          // shrink toward its content before the container agrees to scroll.
+          // Capped against the viewport as well as fixed: the height is still
+          // one number for every tab, so nothing jumps on a switch, but a short
+          // window gets a dialog that fits inside it rather than one running off
+          // both ends. No right gutter, deliberately: the close cross is drawn
+          // over this panel's top corner, but only the *first row of one tab*
+          // ever reaches it, so that row keeps its own `pr-7` and every
+          // sentence in every other tab keeps the full measure. A gutter here
+          // was 28px of empty column down the whole dialog to clear a 16px
+          // glyph. Header actions dodge it by another route — they are drawn in
+          // the strip above, which reserves the corner itself.
+          className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
+        >
+          <SettingsHeaderSlot.Provider value={slot}>{children[tab]}</SettingsHeaderSlot.Provider>
+        </div>
       </div>
     </div>
   );
