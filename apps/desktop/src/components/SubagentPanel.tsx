@@ -48,8 +48,27 @@ export default function SubagentPanel({
     );
   }
 
+  // Same reading as each row's own button, so the count and the rows agree.
+  const stoppable = runs.filter((run) => live && !run.done && run.taskId !== null);
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* Only above two or more: with one, the row's own button is the whole
+          job. Built like a row — same text padding, same control margin — so
+          it is exactly one row tall. */}
+      {stoppable.length > 1 && (
+        <div className="sticky top-0 z-10 flex items-center border-b border-border bg-sidebar text-ui text-muted-foreground">
+          <span className="flex-1 px-3 py-2.5">{stoppable.length} running</span>
+          <Button
+            variant="ghost"
+            size="xs"
+            className="mr-2 shrink-0"
+            onClick={() => stoppable.forEach((run) => onStopTask(run.taskId!))}
+          >
+            Stop all
+          </Button>
+        </div>
+      )}
       {runs.map((run) => (
         <RunRow
           key={run.id}

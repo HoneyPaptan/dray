@@ -749,6 +749,14 @@ export function buildTranscript(
     resultByCallId.set(callId, ABANDONED);
   }
 
+  // A run the child no longer holds is over whether or not it said so:
+  // `subagent_completed` only arrives from a child still alive to send it.
+  // After the abandoned marks, since a stand-in is an answer here too.
+  for (const run of subagentById.values()) {
+    if (run.done || (run.taskId !== null && liveTaskIds.has(run.taskId))) continue;
+    run.done = resultByCallId.has(run.id);
+  }
+
   const mainThread = events.filter((event) => !event.subagent);
 
   return {
