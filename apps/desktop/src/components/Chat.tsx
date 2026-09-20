@@ -176,6 +176,9 @@ export default function Chat({
   // Whether to keep pinning to the bottom. Cleared once the user scrolls up, so
   // reading back through a transcript isn't yanked forward by incoming deltas.
   const followRef = useRef(true);
+  // The content's height at the last scroll event, for telling a scroll the
+  // reader made from one the backfill caused — see `onScroll`.
+  const lastHeight = useRef(-1);
 
   // The same fact as the pin, but as state because the button renders from it.
   // Written from a scroll, a resize and a session switch alike: the transcript
@@ -526,8 +529,31 @@ export default function Chat({
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
-    setAtBottom(followRef.current);
+    const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < AT_BOTTOM_PX;
+    // **A backfilling transcript may only re-arm the pin here, never drop it.**
+    // Opening a session mounts its newest turns and grows the rest in above
+    // them, and every one of those steps is a frame where the scroller is
+    // legitimately short of its end — the compensation above puts it back
+    // before paint, but the scroll events the growth fires are dispatched after
+    // it, some of them reading a position nobody scrolled to. One of those
+    // drops the pin, nothing re-arms it, and the open lands wherever that frame
+    // left it — which is the "it scrolled up on its own" every arrival at a
+    // long session. An upward gesture still wins instantly, since `onWheel` and
+    // the rail clear the pin themselves.
+    //
+    // **A height that did not move is the reader's own, and is honoured.** The
+    // wheel and the rail are not every way up: a scrollbar drag and a touch
+    // drag reach this and nothing else, and refusing them for the whole
+    // backfill would drag the reader back to the bottom for as long as it runs.
+    // What every bogus event above has in common is that the content changed
+    // size in the same frame — the growth is what fired them — so an event
+    // arriving at an unchanged height is one nobody but the reader could have
+    // caused. Scoped to backfilling, since a streaming turn grows on nearly
+    // every frame and would leave that drag refused again.
+    const grew = el.scrollHeight !== lastHeight.current;
+    lastHeight.current = el.scrollHeight;
+    if (atEnd || !backfilling || !grew) followRef.current = atEnd;
+    setAtBottom(atEnd);
     syncActive();
   };
 

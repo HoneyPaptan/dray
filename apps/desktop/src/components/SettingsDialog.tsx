@@ -1196,14 +1196,32 @@ function SettingsTabs({
           // Capped against the viewport as well as fixed: the height is still
           // one number for every tab, so nothing jumps on a switch, but a short
           // window gets a dialog that fits inside it rather than one running off
-          // both ends. No right gutter, deliberately: the close cross is drawn
+          // both ends. No *text* gutter, deliberately: the close cross is drawn
           // over this panel's top corner, but only the *first row of one tab*
           // ever reaches it, so that row keeps its own `pr-7` and every
-          // sentence in every other tab keeps the full measure. A gutter here
+          // sentence in every other tab keeps the full measure. A gutter there
           // was 28px of empty column down the whole dialog to clear a 16px
           // glyph. Header actions dodge it by another route — they are drawn in
           // the strip above, which reserves the corner itself.
-          className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&>*]:shrink-0"
+          //
+          // The track is inset from both ends, because this box runs the
+          // dialog's full height: left alone the bar met the close cross and
+          // the header strip at one end and the dialog's own rounded corner at
+          // the other, reading as chrome laid over the window rather than as a
+          // panel that scrolls. A margin on the track is the only place that
+          // inset can go — padding here is inside the scrollport and the bar
+          // spans it whatever the box is padded by.
+          //
+          // **Not `scrollbar-overlay`, and the two cannot be combined.** WebKit
+          // drops `::-webkit-scrollbar` styling outright for any element that
+          // sets the standard `scrollbar-width`/`scrollbar-color`, so the
+          // sidebar's hidden-until-hover treatment and this inset are a choice
+          // of one. The corner is the part that was wrong in both states, where
+          // a bar drawn while a tab overflows is what every other scroller in
+          // the app does. Static, so the warning on that utility — a
+          // hover-driven pseudo rule resolving late and never clearing — is not
+          // in play here.
+          className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&::-webkit-scrollbar-track]:my-4 [&>*]:shrink-0"
         >
           <SettingsHeaderSlot.Provider value={slot}>{children[tab]}</SettingsHeaderSlot.Provider>
         </div>
