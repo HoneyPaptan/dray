@@ -5,6 +5,18 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.22.1
+
+### Fixed
+
+- **The right pane follows the crew, not each row's own memory.** It
+  opened and shut row by row through a fan-out; it is one arrangement, so
+  it answers under the anchor. From the sidebar or a chord the session
+  answers for itself again.
+- **Arriving at a long transcript lands at the bottom.** Backfill could
+  drop the follow pin mid-way. A drag or a wheel up still wins at once.
+- **Show more is readable on a filled bubble in light mode.**
+
 ## 0.22.0
 
 ### Added
