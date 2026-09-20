@@ -9,6 +9,11 @@ second description of it. GitHub's generated commit list is appended below it.
 
 ### Added
 
+- **The crew: a conversation's spawned sessions beside it.** A column of
+  the sessions the selected one started, a strip each, so a fan-out is
+  read and answered without leaving the conversation that made it.
+  Clicking a strip focuses it and the one composer follows. ⌘⇧C toggles
+  it; ⌘-click a row to anchor a crew of its own.
 - **Accounts, in settings.** Which account each agent runs as — Claude
   Code, Codex, pi and fx — asked of the CLIs themselves, with the
   identity, the auth method and whether the login still works. Signing
