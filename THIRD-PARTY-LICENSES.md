@@ -1,14 +1,8 @@
 # Third-party licences
 
-Other people's work that Dray ships: the palettes it ports, and the engine its
-dictation runs on. Each is MIT, and MIT asks that the copyright notice and
-permission notice travel with the work — so they are reproduced in full here
-rather than linked. The credit tables in [README](README.md) name who each one
-is by; this file is the licence itself.
-
-Ported palettes live in `apps/desktop/src/App.css`. Colours are theirs, token
-names are ours, and each value carries the name it has upstream so a port can be
-checked against its source rather than taken on trust.
+Other people's work that Dray ships. Each is MIT, which asks that the notice
+travel with the work, so each licence is reproduced in full. Ported palettes
+live in `apps/desktop/src/App.css`.
 
 ---
 
@@ -46,10 +40,8 @@ SOFTWARE.
 
 <https://github.com/morhetz/gruvbox>
 
-The grant is in the repo's `package.json` (`"license": "MIT"`, author Pavel
-Pertsev) rather than in a `LICENSE` file — which is why GitHub's own detector,
-which reads only licence files, reports the repo as unlicensed. It is MIT; the
-standard terms follow, with the author named as they are upstream.
+The repo has no `LICENSE` file. The grant is in its `package.json`
+(`"license": "MIT"`, author Pavel Pertsev).
 
 ```
 MIT License
@@ -81,8 +73,7 @@ SOFTWARE.
 
 <https://github.com/Binaryify/OneDark-Pro>
 
-Surfaces are taken from that repo's own `OneDark-Pro-darker.json` and the text
-colours from `OneDark-Pro.json`. Both are in the tree this licence covers.
+Surfaces from `OneDark-Pro-darker.json`, text colours from `OneDark-Pro.json`.
 
 ```
 The MIT License (MIT)
@@ -114,9 +105,8 @@ SOFTWARE.
 
 <https://github.com/wesbos/cobalt2-vscode>
 
-Ported from the VS Code theme, and the repo matters: `wesbos/cobalt2` — the
-original Sublime Text theme — carries no licence file, and no licence grants
-nothing. The VS Code port below is the one that may be shipped.
+Ported from the VS Code theme. The original Sublime theme, `wesbos/cobalt2`,
+has no licence file.
 
 ```
 MIT License
@@ -148,10 +138,9 @@ SOFTWARE.
 
 <https://github.com/handy-computer/transcribe.cpp>
 
-The speech-to-text engine dictation runs on, as the `transcribe-cpp` and
-`transcribe-cpp-sys` crates. Its **own** repository and its **own** copyright
-line — it is published separately from the Handy app below, and this notice is
-not that one.
+The speech-to-text engine dictation runs on, via the `transcribe-cpp` and
+`transcribe-cpp-sys` crates. Published separately from Handy below, under its
+own copyright.
 
 ```
 MIT License
@@ -183,19 +172,12 @@ SOFTWARE.
 
 <https://github.com/cjpais/Handy>
 
-**One thing is taken from this repository: the two dictation sounds.**
-`marimba_start.wav` and `marimba_stop.wav`, copied verbatim to
-`apps/desktop/src/assets/dictate-{start,stop}.wav`. Handy carries no separate
-attribution for them, so they are taken as part of the repository this notice
-grants.
+Only the two dictation sounds are taken: `marimba_start.wav` and
+`marimba_stop.wav`, copied to `apps/desktop/src/assets/dictate-{start,stop}.wav`.
+Nothing else here is Handy's code.
 
-Nothing else here is Handy's code. The engine is `transcribe.cpp` above — a
-different repository under a different copyright line, and reachable without
-Handy — and what is owed beyond the sounds is judgement rather than code: which
-models are worth offering, and that local dictation was worth building at all.
-
-The Handy **name, logo, icon and brand assets are excluded** from this grant by
-their author and are not used in Dray.
+Handy's name, logo, icon and brand assets are excluded from this grant and are
+not used in Dray.
 
 ```
 MIT License
@@ -227,11 +209,7 @@ SOFTWARE.
 
 <https://www.greptile.com>
 
-Not a licence — a trademark note. Greptile review Dray's pull requests for free
-as an OSS sponsor, and Dray marks a prompt running one of their commands with
-**Greptile Green** (`#28e99f`, from their published guidelines at
-<https://www.greptile.com/design>).
-
-That colour is Greptile's mark, used to identify Greptile's own commands and
-nothing else. It is not covered by any grant above, and it travels with its
-owner's permission rather than with a licence file. No Greptile artwork is used.
+A trademark note, not a licence. Dray marks a prompt running a Greptile command
+with Greptile Green (`#28e99f`, from <https://www.greptile.com/design>). The
+colour identifies Greptile's own commands and nothing else. It is used with
+their permission. No Greptile artwork is used.
