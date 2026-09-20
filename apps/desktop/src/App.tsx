@@ -1874,13 +1874,26 @@ function App() {
   const fullscreen = useFullscreen();
   useGlass(fullscreen);
 
+  // The session on screen, whether or not its transcript has landed. A session
+  // just selected is not in memory for the round trip that reads it, and
+  // `selectedSession` is null for exactly that window — so every arrangement
+  // gated on it, the centred composer, the view tabs and the right pane, was
+  // torn down at the click and rebuilt when the read answered. In the main
+  // column that read as the switch; beside a crew it was the anchor, the pane
+  // and the column remounting under rows that had not moved, and only ever on
+  // a row's first open (DRA-274). The index carries what the layout needs of
+  // it meanwhile. The transcript still waits on the snapshot, and draws an
+  // empty pane until it lands rather than a different screen.
+  const shownSession =
+    selectedSession ?? sessionIndexItems.find((i) => i.sessionId === selectedSessionId) ?? null;
+
   return (
     <TooltipProvider>
     <DiffWorkerPool pair={codeThemePair}>
     <AppShell
       // The issues page fills the column, so the centred empty-composer state
       // is wrong there even with no session selected.
-      centered={!selectedSession && !issuesOpen}
+      centered={!shownSession && !issuesOpen}
       overlay={singleDrop && <DropZone region={singleDrop.region} label={singleDrop.label} />}
       // Chat's alone, and not a `TabBody` — the other views answer questions
       // about a repository rather than about a conversation, and a split is
@@ -2014,7 +2027,7 @@ function App() {
             className="flex-1"
           />
 
-          {!issuesOpen && selectedSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
+          {!issuesOpen && shownSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can
@@ -2023,7 +2036,7 @@ function App() {
               pickedIssue && (
                 <PanelToggle onToggle={() => setPickedIssue(null)} open changes={false} />
               )
-            : selectedSession && (
+            : shownSession && (
                 <PanelToggle
                   onToggle={handleTogglePanel}
                   open={panelOpen}
@@ -2082,7 +2095,7 @@ function App() {
         // tabs only hides, so reopening shows what was already there instead of
         // refetching and re-highlighting it. `active` is what stops the hidden
         // changes tab from snapshotting the working tree in the background.
-        selectedSession ? (
+        shownSession ? (
           <RightPanel
             open={panelShown}
             tab={activeTab}
@@ -2102,11 +2115,11 @@ function App() {
             issue={hasIssueTab}
             subagents={hasSubagentsTab}
             refresh={panelRefresh}
-            cwd={selectedSession.cwd}
+            cwd={shownSession.cwd}
           >
             <TabBody active={activeTab === "changes"}>
               <ChangesPanel
-                cwd={selectedSession.cwd}
+                cwd={shownSession.cwd}
                 baseline={baseline}
                 onOpenRepo={() => setViewTab("changes")}
                 {...changesData}
@@ -2114,7 +2127,7 @@ function App() {
             </TabBody>
             <TabBody active={activeTab === "browser"}>
               <BrowserPane
-                sessionId={selectedSession.sessionId}
+                sessionId={shownSession.sessionId}
                 active={panelShown && activeTab === "browser"}
                 mode="panel"
                 fullOpen={fullBrowserOpen}
@@ -2135,7 +2148,7 @@ function App() {
             <TabBody active={hasPrTab && activeTab === "pr"}>
               <PrPanel
                 branch={prBranch}
-                cwd={selectedSession?.cwd ?? ""}
+                cwd={shownSession.cwd}
                 {...pullRequests}
               />
             </TabBody>
@@ -2196,7 +2209,7 @@ function App() {
           queuedCount={queuedMessages.length}
           busy={busy}
           sessionId={selectedSessionId}
-          isNewTask={!selectedSession}
+          isNewTask={!shownSession}
           target={composerTarget}
           issuesConnected={issuesConnected}
           sessions={composerSessions}
