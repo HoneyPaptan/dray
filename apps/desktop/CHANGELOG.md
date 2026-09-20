@@ -5,6 +5,23 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.22.2
+
+### Fixed
+
+- **A sidebar click on a crew row you are reading now opens it in full.**
+  It changed nothing before, so it read as broken.
+- **Opening a session no longer flashes.** The layout followed a read
+  that had not landed yet, so the main column, crew and right pane were
+  torn down and rebuilt on every cold open.
+- **The follow pin survives that open too**, so a long transcript lands
+  at the bottom rather than a little above it.
+
+### Changed
+
+- **The crew column has a left edge**, a ramp at full strength beside the
+  composer and gone by the top.
+
 ## 0.22.1
 
 ### Fixed
