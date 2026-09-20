@@ -5,6 +5,30 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.22.0
+
+### Added
+
+- **Accounts, in settings.** Which account each agent runs as — Claude
+  Code, Codex, pi and fx — asked of the CLIs themselves, with the
+  identity, the auth method and whether the login still works. Signing
+  in opens a terminal and runs the command for you; Codex and pi also
+  take a key straight from the form. Dray stores no agent credential.
+- **Settings groups moved to a rail.** Seven tabs across the top wrapped
+  onto a second line; down the side they are one list.
+
+### Changed
+
+- **Placed tags are chips in the composer.** A session tag no longer puts
+  36 characters of uuid in your sentence, a file mention shows its name
+  and a glyph, and an issue tag shows the title rather than the
+  identifier. What gets sent is unchanged.
+- **Browser sits before Diff in the view tabs**, so it takes ⌘⌥2 and Diff
+  ⌘⌥3.
+- **A long user message is clamped to twenty lines.** A pasted stack
+  trace or file no longer buries the answer it asked for. Click to open
+  it; nothing is truncated.
+
 ## 0.21.0
 
 ### Added
