@@ -2,6 +2,7 @@ import { Image } from "lucide-react";
 import type { CSSProperties } from "react";
 
 import SessionAvatar from "@/components/SessionAvatar";
+import ClampedBody from "@/components/chat/ClampedBody";
 import FileLink from "@/components/chat/FileLink";
 import ImageRow from "@/components/chat/ImageRow";
 import { inlineMark } from "@/components/chat/InlineMark";
@@ -46,6 +47,10 @@ import type { ImageRef, IssueRef, MessageSender } from "@/types/events";
 /// The line the backend writes into the prompt for the receiving agent is taken
 /// back off here, since the row above already says who is talking — safe to
 /// mute precisely because the field, not the prose, is what draws it.
+///
+/// A pasted wall is clamped to twenty lines by [ClampedBody], which the queued
+/// bubble shares — so the same prompt is bounded the same way before and after
+/// delivery.
 ///
 /// An issue tag is the one coloured run that is also a *link*: it opens the
 /// issue on the issues page, where the reader can read it and move its status
@@ -151,7 +156,7 @@ export default function UserMessage({
               every other message sideways. Anywhere rather than `break-words`:
               only `anywhere` shrinks min-content width, which is the part that
               sets that scroll width. */}
-          <span className="text-chat whitespace-pre-wrap wrap-anywhere">
+          <ClampedBody className="text-chat">
             {/* Plain runs concatenate back to `text` exactly, so the spacing the
                 user typed survives — nothing here is rebuilt from a parse.
                 A mention is the one run drawn shorter than it was sent: the
@@ -289,7 +294,7 @@ export default function UserMessage({
                 </span>
               );
             })}
-          </span>
+          </ClampedBody>
         </div>
       )}
 
