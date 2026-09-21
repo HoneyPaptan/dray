@@ -5,6 +5,14 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.22.4
+
+### Fixed
+
+- **A long permission option no longer runs off the card.** A rule
+  carrying its own subject — "Always allow mkdir -p /tmp/thing" — wraps
+  instead of overflowing the crew column's right edge.
+
 ## 0.22.3
 
 ### Added
