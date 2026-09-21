@@ -5,6 +5,23 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.22.3
+
+### Added
+
+- **Chat input is a font size you can set**, in Appearance beside the
+  other three. It had been stuck at the browser default; it now matches
+  the transcript it feeds.
+
+### Fixed
+
+- **A crew child asking permission draws its card in the column**
+  rather than raising a notice over a session already on screen.
+- **A request arriving as a session loads is no longer lost.** It could
+  leave the row lit yellow over an empty transcript, with nothing to
+  answer — a permission request is never written to the log, so that
+  was the only copy.
+
 ## 0.22.2
 
 ### Fixed
