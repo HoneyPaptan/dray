@@ -110,7 +110,7 @@ import { basename } from "@/lib/format";
 import { focusComposer } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
-import { crewAnchor, crewRows } from "@/lib/crew";
+import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
 import { playCelebration } from "@/lib/sound";
 import {
   activeSpace,
@@ -197,6 +197,7 @@ function App() {
     removeWorktree,
     ensureLoaded,
     setOnScreen,
+    setCrewSeen,
     paneState,
     indexSide,
   } = useSessions();
@@ -770,6 +771,30 @@ function App() {
     // Both are rebuilt every render; the key is what changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onScreenKey]);
+
+  // Every row of a drawn crew, for `announce` alone — see `crewSeen`. Wider
+  // than `crewShown` above on purpose: that one loads and read-marks, where
+  // this one only answers whether a card would land in front of the reader,
+  // which every strip does without being opened first.
+  //
+  // **A layout effect, which is the one place this differs from `setOnScreen`
+  // above — and the difference is which way being wrong costs.** That set only
+  // widens what is kept in memory; a stale reading here *suppresses* a notice,
+  // so it has to be exact in both directions and neither of the ordinary two
+  // is. An ordinary effect lands after paint, so a crew put away with the chord
+  // or flipped behind another view tab would go on naming its rows for a frame,
+  // and an ask arriving there would be silenced with nothing on screen to
+  // silence it for. A render-time write is the opposite hole: React may
+  // interrupt or throw a render away, leaving this describing a column that was
+  // never committed. A layout effect runs inside the commit and before the
+  // browser paints, so what it publishes is always what was committed and there
+  // is no frame in which the reader and this ref disagree — an event listener
+  // is a task and cannot land in the middle of one.
+  const crewSeenKey = crewSeen(crew, crewDrawn).join("\n");
+  useLayoutEffect(() => {
+    setCrewSeen(crewSeenKey.split("\n").filter(Boolean));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crewSeenKey]);
 
   // Focusing a transcript is what points the composer at it, and it is separate
   // from opening one: reaching into a transcript to scroll or copy is not
