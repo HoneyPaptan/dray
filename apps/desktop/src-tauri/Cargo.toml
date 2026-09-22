@@ -81,6 +81,10 @@ futures-util = "0.3"
 # Verifies a downloaded model against the catalog's hash. A partial file left by
 # a killed process is otherwise indistinguishable from a whole one.
 sha2 = "0.10"
+# The DevTools protocol travels over a WebSocket. `connect` alone, with no TLS
+# feature: the only endpoint this ever opens is a loopback `ws://` on a browser
+# this process started, so a TLS stack here would be a dependency nothing uses.
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect"] }
 
 # Metal on macOS, CPU everywhere else — the backend is chosen at *build* time,
 # so it cannot be switched per model or per machine. Split across two tables
