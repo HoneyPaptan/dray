@@ -640,7 +640,6 @@ pub fn run() {
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
         .manage(transcription::TranscriptionState::default())
-        .menu(quit::menu)
         .on_menu_event(|app, event| {
             if event.id() == quit::QUIT_ID {
                 quit::request(app);

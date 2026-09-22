@@ -1,20 +1,17 @@
 //! Quitting is confirmed in-app, so every route out has to reach the frontend
 //! first.
 //!
-//! There are two, and only one of them is an ordinary window event. Closing the
-//! window fires `CloseRequested`, which can be prevented. ⌘Q does not: macOS
-//! sends the predefined Quit item straight to `NSApplication.terminate`, and
-//! Tauri emits no `ExitRequested` for it — so the app menu is rebuilt here with
-//! a *custom* Quit item carrying the same accelerator, which does arrive as a
-//! menu event. That is the whole reason this app builds its own menu rather
-//! than taking `Menu::default`.
-//!
-//! One route stays unguarded and cannot be closed: Quit from the Dock's context
-//! menu bypasses the menu bar entirely.
+//! On Linux that is one route: closing the window fires `CloseRequested`, which
+//! can be prevented. The app therefore sets **no** menu at all — Tauri installs
+//! its default one on macOS alone (`App::build`), so leaving the builder's
+//! `.menu()` unset is what keeps GTK from drawing an Edit/Window/Help bar above
+//! the app's own titlebar. A custom menu existed to intercept macOS's ⌘Q, which
+//! reaches `NSApplication.terminate` without emitting `ExitRequested`; that
+//! platform is gone from this fork and the menu went with it.
 
 use std::sync::Mutex;
 
-use tauri::{menu::Menu, AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 pub const QUIT_ID: &str = "quit";
 
@@ -30,13 +27,6 @@ pub struct PendingQuit(Mutex<bool>);
 /// The event the confirmation dialog listens for. Carries nothing — the dialog
 /// asks the same question however the quit was asked for.
 pub const QUIT_REQUESTED: &str = "quit_requested";
-
-/// Mirrors Tauri's default macOS menu with one substitution: Quit is a custom
-/// The window's close button is the only route out, and it already arrives as
-/// a preventable event — so the default menu is left alone.
-pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    Menu::default(app)
-}
 
 pub fn request<R: Runtime>(app: &AppHandle<R>) {
     let pending = app.state::<PendingQuit>();
