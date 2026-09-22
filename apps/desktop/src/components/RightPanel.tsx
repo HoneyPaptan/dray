@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useResizable } from "@/components/ResizeHandle";
+import { OWN_WINDOW_CONTROLS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 /// The header button that opens and closes the pane. Lives here rather than in
@@ -336,6 +337,10 @@ export default function RightPanel({
           // pane can be dragged narrow, and what runs out of room has to clip
           // at its own edge rather than draw over the transcript beside it.
           "flex h-(--titlebar-h) shrink-0 items-center gap-0.5 overflow-hidden px-2",
+          // This row reaches the window's trailing edge whenever the pane is
+          // open, which is the only time it is drawn — so it always clears the
+          // controls the app draws for itself off macOS.
+          OWN_WINDOW_CONTROLS && "pr-(--window-controls-w)",
           !heading && "border-b border-border",
         )}
         data-tauri-drag-region="deep"

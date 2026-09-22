@@ -15,6 +15,7 @@ import ChatInput from "@/components/ChatInput";
 import DiffWorkerPool from "@/components/DiffWorkerPool";
 import DocsPanel from "@/components/DocsPanel";
 import NoticeStack from "@/components/NoticeStack";
+import { WindowControls } from "@/components/WindowControls";
 import LinkDialog from "@/components/chat/LinkDialog";
 import QuitDialog from "@/components/QuitDialog";
 import SettingsDialog, { type SettingsTab } from "@/components/SettingsDialog";
@@ -129,6 +130,7 @@ import {
 } from "@/lib/space";
 import { worktreeNoticeDetail } from "@/lib/worktree";
 import { buildTranscript } from "@/lib/transcript";
+import { leadingEdgeFree, OWN_WINDOW_CONTROLS } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 
 const PANE_DIGITS = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
@@ -2160,7 +2162,13 @@ function App() {
           // here must clip at the column's edge, never spill over the pane
           // beside it. Every child below decides how it gives up width; this
           // decides that it has to.
-          className="flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3"
+          className={cn(
+            "flex h-(--titlebar-h) shrink-0 items-center gap-2 overflow-hidden px-3",
+            // The window's own controls are drawn over the trailing edge off
+            // macOS, so whatever row reaches that edge has to clear them. With
+            // the pane open it is the pane's tab row, not this one.
+            OWN_WINDOW_CONTROLS && !panelShown && "pr-(--window-controls-w)",
+          )}
           // `deep`, not bare: bare drags only on direct hits, so every label
           // inside this row was a dead strip in a titlebar that looks uniform.
           // Buttons still block on their own — Tauri stops walking up at any
@@ -2176,7 +2184,7 @@ function App() {
                 "flex items-center",
                 // Fullscreen has no traffic lights, so the toggle pulls back past
                 // the header's own padding to sit flush at the window edge.
-                fullscreen ? "-ml-1" : "pl-(--traffic-lights-w)",
+                leadingEdgeFree(fullscreen) ? "-ml-1" : "pl-(--traffic-lights-w)",
               )}
             >
               {/* No dev badge beside it: the badge lives at the sidebar's
@@ -2608,6 +2616,10 @@ function App() {
         </TabBody>
       )}
     </AppShell>
+    {/* Same bargain as the stack below: fixed to the window, and the shell has
+        no slot that isn't a pane. Draws nothing where the OS owns the
+        controls. */}
+    <WindowControls />
     {/* Outside `AppShell` on purpose: it is fixed to the window rather than
         placed in the layout, and the shell has no slot that isn't a pane. */}
     <NoticeStack

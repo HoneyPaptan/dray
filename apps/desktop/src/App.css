@@ -1109,6 +1109,10 @@
     /* Horizontal clearance for those same lights, needed only when a pane
        reaches the window's left edge — i.e. with the sidebar collapsed. */
     --traffic-lights-w: 78px;
+    /* The mirror of the above on the platforms this app draws its own controls
+       on, where they sit at the trailing edge instead. Three 28px buttons, the
+       gaps between them and the strip's own padding. */
+    --window-controls-w: 96px;
   }
 
   /* The one surface that reaches the window edge, and the only thing in the app

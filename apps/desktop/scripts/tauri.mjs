@@ -38,6 +38,14 @@ if (args[0] === "dev" && !args.some((a) => a === "-c" || a === "--config")) {
   console.log(`  Info dev server on port ${port}`);
   // Merged in order, so the port lands over whatever the dev flavour says.
   args.push("--config", "src-tauri/tauri.dev.conf.json");
+  // `tauri.linux.conf.json` is merged before anything named on the command line,
+  // and a config array is replaced rather than merged — so the dev flavour's own
+  // `windows` entry, which restates the macOS chrome for that reason, puts the
+  // native titlebar back on a platform that draws its own. This says the
+  // platform's answer again, after it.
+  if (process.platform === "linux") {
+    args.push("--config", "src-tauri/tauri.dev.linux.conf.json");
+  }
   args.push("--config", JSON.stringify({ build: { devUrl: `http://localhost:${port}` } }));
 }
 

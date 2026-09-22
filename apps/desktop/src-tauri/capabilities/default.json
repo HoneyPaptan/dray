@@ -10,6 +10,9 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-badge-count",
     "core:window:allow-set-theme",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
     "opener:default",
     "dialog:default"
   ]

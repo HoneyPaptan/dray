@@ -52,6 +52,7 @@ import { isToday, relativeTime } from "@/lib/format";
 import { groupName, members, type SplitGroup } from "@/lib/groups";
 import { sessionBranch } from "@/lib/pr";
 import { useResizable } from "@/components/ResizeHandle";
+import { leadingEdgeFree } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import type {
   PrMark,
@@ -1071,7 +1072,7 @@ export default function Sidebar({
           "flex h-(--titlebar-h) shrink-0 items-center px-2",
           // Left-aligned, the toggle's larger icon would sit 2px inside the
           // buttons below it; nudge it out so every icon shares one edge.
-          fullscreen ? "justify-start pl-2" : "justify-end",
+          leadingEdgeFree(fullscreen) ? "justify-start pl-2" : "justify-end",
         )}
         data-tauri-drag-region="deep"
       >
@@ -1084,7 +1085,7 @@ export default function Sidebar({
             exists: it is the one place in the app that says spaces are a thing,
             and a control that only appears once you have found the setting can
             only be found by someone who did not need it. */}
-        {fullscreen ? (
+        {leadingEdgeFree(fullscreen) ? (
           <>
             <SidebarToggle onToggle={onToggleCollapsed} />
             <SettingsButton onOpen={onOpenSettings} />
