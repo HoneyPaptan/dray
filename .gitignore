@@ -40,3 +40,5 @@ out
 # Release runbook. Local only — it names hosts and checks that are
 # operator business, not the public repo's.
 apps/desktop/RELEASING.md
+dist-mobile
+apps/mobile/src-tauri/target

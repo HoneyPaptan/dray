@@ -1,0 +1,14 @@
+{
+  "name": "dray-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "frontend:dev": "pnpm --filter dray dev:mobile",
+    "frontend:build": "pnpm --filter dray build:mobile",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

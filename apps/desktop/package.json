@@ -13,7 +13,9 @@
     "tauri": "node scripts/tauri.mjs",
     "app": "node scripts/tauri.mjs dev",
     "install:app": "./scripts/install.sh",
-    "icons": "./scripts/icons.sh"
+    "icons": "./scripts/icons.sh",
+    "dev:mobile": "vite --mode mobile --port 1421 --strictPort --host",
+    "build:mobile": "tsc && vite build --mode mobile --outDir dist-mobile"
   },
   "dependencies": {
     "@blobatar/react": "^2.5.0",
