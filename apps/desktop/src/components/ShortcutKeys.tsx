@@ -3,6 +3,7 @@ import { Fragment } from "react";
 
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { useShortcutOverrides, chordFor } from "@/hooks/useShortcuts";
+import { useIsNarrow } from "@/lib/phoneLayout";
 import { formatChords, type ShortcutId } from "@/lib/shortcuts";
 
 /// The caps for one or more shortcuts, read off the same store `useHotkey`
@@ -18,6 +19,11 @@ export default function ShortcutKeys({
   className?: string;
 }) {
   useShortcutOverrides();
+  // A phone has no keyboard to press these on, so a cap there is a control the
+  // reader cannot use taking width from the row's own words. Stated once here
+  // rather than at each of the dozen sites that draw one.
+  const narrow = useIsNarrow();
+  if (narrow) return null;
   const groups = formatChords(ids.map(chordFor));
   return (
     <KbdGroup className={className}>

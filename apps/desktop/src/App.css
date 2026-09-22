@@ -1246,6 +1246,75 @@
     @apply h-full overflow-hidden;
   }
 
+  /* A phone's viewport changes height when the soft keyboard opens and when the
+     browser chrome retracts, and `100%` resolves against neither. `dvh` is the
+     one unit that tracks both, so the composer stays above the keyboard rather
+     than under it. Narrow only: on a desktop window the two are the same number
+     and this would be a second way to say one thing. */
+  @media (max-width: 820px) {
+    html,
+    body,
+    #root {
+      height: 100dvh;
+    }
+
+    /* Android draws the webview edge to edge, so without this the first row of
+       chrome sits under the status bar — where it is not merely hard to read
+       but untappable, since the system takes the touch first. `border-box` is
+       already global, so the padding comes out of the height rather than
+       overflowing it. Elements drawn `fixed` are positioned against the
+       viewport and take none of this; each one insets itself. */
+    #root {
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    /* A phone is held further from the eye than a laptop and has no pointer to
+       aim with, so the desktop's own scale reads as small rather than as dense.
+       The hooks are the ones the Appearance tab already writes, so a reader who
+       sets their own size still wins: that lands as an inline style on `html`,
+       which out-specifies this. */
+    html {
+      --fs-ui: 0.9375rem;
+      --fs-chat: 1rem;
+      --fs-prompt: 1rem;
+      --fs-code: 0.8125rem;
+      /* The chrome rows are sized for a cursor. Every control in them is
+         centred against this, so raising it is what makes them hittable
+         without moving a single icon off its own centre. */
+      --titlebar-h: 3rem;
+    }
+
+    /* The sidebar is a drawer here, so its desktop width is the wrong question
+       — it is not sharing the window with anything, it is covering it. Wide
+       enough to read a session title, narrow enough to leave the transcript
+       visible behind the scrim. `!important` because the width arrives as an
+       inline style from the drag handle, which is itself meaningless on a
+       touch screen and goes with it. */
+    [data-phone-drawer] > aside {
+      width: min(84vw, 340px) !important;
+    }
+
+    [data-phone-drawer] [aria-label="Resize the sidebar"],
+    [data-phone-panel] [aria-label="Resize the panel"] {
+      display: none;
+    }
+
+    /* The pane is sized to sit beside a conversation; here it replaces one. */
+    [data-phone-panel] > div > aside {
+      width: 100% !important;
+    }
+
+    /* A finger is about 9mm across and a mouse cursor is one pixel, so every
+       row the desktop draws at 28px is a target this cannot hit reliably.
+       Height alone rather than padding, or the icons inside would move off
+       their own centres. */
+    [data-phone-drawer] button,
+    [data-phone-drawer] [role="button"] {
+      min-height: 2.75rem;
+    }
+  }
+
   ::-webkit-scrollbar {
     @apply w-2 h-2;
   }

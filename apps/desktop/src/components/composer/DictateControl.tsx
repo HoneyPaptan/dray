@@ -8,6 +8,7 @@ import Spinner from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { RecorderState } from "@/hooks/useTranscription";
 import { cn } from "@/lib/utils";
+import { IS_REMOTE } from "@/lib/transport";
 
 /// The controls are 28px (`icon-sm`), so every state of this component is too.
 ///
@@ -47,6 +48,11 @@ export default function DictateControl({
   onRetry: () => void;
   onReveal: () => void;
 }) {
+  // The engine is cmake and C++ and the capture is ALSA; neither crosses to a
+  // phone, and the runtime this build talks to is on another machine anyway.
+  // Android's own keyboard already offers voice input.
+  if (IS_REMOTE) return null;
+
   if (state === "transcribing") {
     return (
       // The stop button again, with the tick swapped for a spinner. Recording's

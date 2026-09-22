@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Plus } from "lucide-react";
 
@@ -45,6 +45,7 @@ import { useWorkStatus } from "@/hooks/useWorkStatus";
 import HandoffRow from "@/components/composer/HandoffRow";
 import { trackFeature } from "@/lib/analytics";
 import { handoffActions } from "@/lib/handoff";
+import { setPhoneDrawer, useIsNarrow } from "@/lib/phoneLayout";
 import { prTabVisible, usePullRequest } from "@/hooks/usePullRequest";
 import RightPanel, {
   PanelToggle,
@@ -413,7 +414,7 @@ function App() {
   ) => {
     let disposition: WorktreeDisposition;
     try {
-      disposition = await invoke<WorktreeDisposition>("worktree_disposition", { sessionId });
+      disposition = await call<WorktreeDisposition>("worktree_disposition", { sessionId });
     } catch {
       // An offer, not a step: a session whose state can't be read keeps its
       // worktree and says nothing. The button on the settled bar is still
@@ -466,6 +467,15 @@ function App() {
   // once here instead of on the first diff the user happens to open.
   const { pair: codeThemePair } = useCodeTheme();
   useEffect(() => warmHighlighter(codeThemePair), [codeThemePair]);
+
+  // Narrow, the sidebar is drawn over the chat, so picking a session has to put
+  // it away — the row the reader pressed is covering the thing they pressed it
+  // for. Wide, there is no drawer and this changes nothing.
+  useEffect(() => setPhoneDrawer(false), [selectedSessionId]);
+
+  // Read here as well as in `AppShell`, since the header this file builds has
+  // to give its tab row up at the same width the shell starts drawing one.
+  const narrow = useIsNarrow();
 
   // The chat derives this too, but the panel and the header count need it here
   // and the memo makes the second pass free.
@@ -2208,7 +2218,9 @@ function App() {
             className="flex-1"
           />
 
-          {!issuesOpen && shownSession && <ViewTabs tab={viewTab} onChange={setViewTab} />}
+          {!issuesOpen && shownSession && !narrow && (
+            <ViewTabs tab={viewTab} onChange={setViewTab} />
+          )}
 
           {issuesOpen
             ? // Only once something is open to close. Nothing on this page can
@@ -2227,6 +2239,15 @@ function App() {
                 />
               )}
         </header>
+      }
+      panelOpen={panelShown}
+      onPanelClose={issuesOpen ? () => setPickedIssue(null) : handleTogglePanel}
+      // The header cannot hold a session's name and four tab labels at a
+      // phone's width, so on a narrow window the row moves under it. `AppShell`
+      // draws this only while narrow, which is the same question the header
+      // above asks — one reading, stated at both ends rather than inferred.
+      subheader={
+        !issuesOpen && shownSession ? <ViewTabs tab={viewTab} onChange={setViewTab} /> : null
       }
       panel={
         // The pane describes whatever the main column is showing. On the issues

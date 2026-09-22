@@ -1,3 +1,5 @@
+import { IS_REMOTE } from "./transport";
+
 /// Whether to draw ⌘ or Ctrl in a shortcut hint.
 ///
 /// Rendered rather than detected per-keystroke: [useHotkey](../hooks/useHotkey.ts)
@@ -18,8 +20,9 @@ export const TRAFFIC_LIGHTS = IS_MAC;
 /// Whether the app draws the window's own minimise, maximise and close.
 ///
 /// The inverse of the above rather than a second reading of the platform, so
-/// the two can never disagree about who owns the chrome.
-export const OWN_WINDOW_CONTROLS = !TRAFFIC_LIGHTS;
+/// the two can never disagree about who owns the chrome. The phone build owns
+/// no window at all, so it draws none either.
+export const OWN_WINDOW_CONTROLS = !TRAFFIC_LIGHTS && !IS_REMOTE;
 
 /// True where nothing native sits at the leading edge of a titlebar row.
 ///
