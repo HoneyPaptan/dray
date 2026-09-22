@@ -46,6 +46,22 @@ pub async fn notify_session(
         #[cfg(target_os = "macos")]
         notification.sound_name(sound_for(&kind));
 
+        // The freedesktop server reports a click on the banner body as
+        // `"default"` only for an app that declared that action, so without this
+        // the wait below can only ever be told the banner closed — a banner that
+        // raises the window on macOS and does nothing at all on Linux.
+        //
+        // Critical is what keeps a question on screen until it is answered:
+        // GNOME expires `Normal` after a few seconds, which is right for a turn
+        // that has finished and wrong for one that is still holding.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            notification.action("default", "Open").sound_name(sound_for(&kind));
+            if kind == "asking" {
+                notification.urgency(notify_rust::Urgency::Critical);
+            }
+        }
+
         let handle = match notification.show() {
             Ok(handle) => handle,
             // Best-effort by design: the in-app notice and the sidebar rail both
@@ -53,7 +69,9 @@ pub async fn notify_session(
             Err(e) => return eprintln!("[notify err] {e}"),
         };
 
-        #[cfg(target_os = "macos")]
+        // Not per-platform: notify-rust reports through one signature on every
+        // backend and normalises both names this reads, so the macOS handle and
+        // the freedesktop one answer the same two words.
         handle.wait_for_action(|action| {
             // A tap on the banner body is `"default"`; a dismissal or an expiry
             // is `"__closed"`, which is the reader declining to look — raising
@@ -62,10 +80,6 @@ pub async fn notify_session(
                 activate(&app, &session_id);
             }
         });
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = (handle, &app, &session_id, &kind);
-        }
     });
 
     Ok(())
@@ -88,6 +102,21 @@ fn sound_for(kind: &str) -> &'static str {
     match kind {
         "asking" => "Ping",
         _ => "",
+    }
+}
+
+/// The same split, in the freedesktop sound theme's vocabulary.
+///
+/// These are theme *names*, not files, and an unknown one is silently ignored —
+/// so both are taken from the naming spec's own list rather than invented.
+/// `""` has no special meaning here, which is why there is no default arm
+/// standing in for one: a turn that finished gets the sound the spec names for
+/// exactly that.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn sound_for(kind: &str) -> &'static str {
+    match kind {
+        "asking" => "message-new-instant",
+        _ => "complete",
     }
 }
 
@@ -117,7 +146,6 @@ fn request_auth_once() {
 ///
 /// Both halves are needed and neither implies the other: the OS raises the app
 /// on its own, but nothing about being frontmost selects a session.
-#[cfg(target_os = "macos")]
 fn activate(app: &AppHandle, session_id: &str) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
