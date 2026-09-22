@@ -83,6 +83,15 @@ struct Waiting {
 pub struct RemoteServer {
     clients: Mutex<HashMap<u64, Client>>,
     waiting: Mutex<HashMap<u64, Waiting>>,
+    /// Asset ticket to the client it was minted for.
+    ///
+    /// Images are fetched by the webview's own `<img>`, which can carry no
+    /// header, so that one credential has to ride the query string. It is not
+    /// the reader's token: that opens the websocket, which can create sessions
+    /// and send prompts, and a URL ends up in the DOM and in any log between
+    /// here and there. A ticket reads assets, nothing else, and dies with the
+    /// connection that was given it.
+    tickets: Mutex<HashMap<String, u64>>,
     next_client: AtomicU64,
     next_token: AtomicU64,
 }
@@ -121,6 +130,17 @@ impl RemoteServer {
     fn forget_client(&self, client: u64) {
         self.clients.lock().unwrap().remove(&client);
         self.waiting.lock().unwrap().retain(|_, w| w.client != client);
+        self.tickets.lock().unwrap().retain(|_, owner| *owner != client);
+    }
+
+    fn mint_ticket(&self, client: u64) -> String {
+        let ticket = uuid::Uuid::new_v4().simple().to_string();
+        self.tickets.lock().unwrap().insert(ticket.clone(), client);
+        ticket
+    }
+
+    fn knows_ticket(&self, ticket: &str) -> bool {
+        self.tickets.lock().unwrap().contains_key(ticket)
     }
 }
 
@@ -261,14 +281,24 @@ async fn handle(stream: TcpStream, app: AppHandle, token: String) -> Result<()> 
     let read = stream.peek(&mut peeked).await?;
     let head = String::from_utf8_lossy(&peeked[..read]).to_string();
 
+    let server = app
+        .try_state::<Arc<RemoteServer>>()
+        .map(|s| s.inner().clone())
+        .context("remote server state missing")?;
+
     if head.to_ascii_lowercase().contains("upgrade: websocket") {
-        serve_socket(stream, app, token).await
+        serve_socket(stream, app, token, server).await
     } else {
-        serve_asset(stream, &head, read, &token).await
+        serve_asset(stream, &head, read, &server).await
     }
 }
 
-async fn serve_socket(stream: TcpStream, app: AppHandle, token: String) -> Result<()> {
+async fn serve_socket(
+    stream: TcpStream,
+    app: AppHandle,
+    token: String,
+    server: Arc<RemoteServer>,
+) -> Result<()> {
     let socket = tokio_tungstenite::accept_async(stream).await?;
     let (mut sink, mut source) = socket.split();
 
@@ -276,14 +306,12 @@ async fn serve_socket(stream: TcpStream, app: AppHandle, token: String) -> Resul
     // websocket, so there is nowhere else for it to go.
     let authorised = Arc::new(Mutex::new(false));
 
-    let server = app
-        .try_state::<Arc<RemoteServer>>()
-        .map(|s| s.inner().clone())
-        .context("remote server state missing")?;
-
     let id = server.next_client.fetch_add(1, Ordering::Relaxed);
+    // Registered only once the token has been seen. `broadcast` writes to every
+    // client in this map, so a connection joining it before authenticating is
+    // handed the whole event stream — every agent_event, every transcript — for
+    // free. The channel exists from the start; membership does not.
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    server.clients.lock().unwrap().insert(id, Client { outbound: tx });
 
     let writer = tauri::async_runtime::spawn(async move {
         while let Some(frame) = rx.recv().await {
@@ -301,12 +329,17 @@ async fn serve_socket(stream: TcpStream, app: AppHandle, token: String) -> Resul
             let ok = serde_json::from_str::<Value>(&text)
                 .ok()
                 .and_then(|v| v.get("token").and_then(Value::as_str).map(str::to_owned))
-                .is_some_and(|presented| presented == token);
+                .is_some_and(|presented| constant_time_eq(&presented, &token));
             if !ok {
                 break;
             }
             *authorised.lock().unwrap() = true;
-            server.send_to(id, json!({ "event": "remote_ready", "payload": null }).to_string());
+            server.clients.lock().unwrap().insert(id, Client { outbound: tx.clone() });
+            let ticket = server.mint_ticket(id);
+            server.send_to(
+                id,
+                json!({ "event": "remote_ready", "payload": { "asset": ticket } }).to_string(),
+            );
             continue;
         }
         let Ok(frame) = serde_json::from_str::<ClientFrame>(&text) else { continue };
@@ -321,11 +354,31 @@ async fn serve_socket(stream: TcpStream, app: AppHandle, token: String) -> Resul
     Ok(())
 }
 
+/// Compare two secrets without letting the clock say where they differ.
+///
+/// Folded rather than short-circuited: `==` on a `String` returns at the first
+/// byte that differs, so the time it takes is a measurement of how much of the
+/// token a caller has guessed. Length is folded in the same way rather than
+/// checked first, which would leak it on its own.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        diff |= a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0);
+    }
+    diff == 0
+}
+
 /// One file, for the images a transcript draws. Read straight rather than
 /// streamed: the cap is what keeps that honest.
 const MAX_ASSET: u64 = 16 * 1024 * 1024;
 
-async fn serve_asset(mut stream: TcpStream, head: &str, peeked: usize, token: &str) -> Result<()> {
+async fn serve_asset(
+    mut stream: TcpStream,
+    head: &str,
+    peeked: usize,
+    server: &RemoteServer,
+) -> Result<()> {
     // Byte count, never `head.len()`: the head was decoded lossily, so a
     // non-ASCII byte makes the two disagree and the drain then eats into the
     // next request or stops short of this one.
@@ -342,14 +395,17 @@ async fn serve_asset(mut stream: TcpStream, head: &str, peeked: usize, token: &s
         .map(|(k, v)| (k.to_string(), percent_decode(v)))
         .collect();
 
-    if query.get("token").map(String::as_str) != Some(token) {
+    // A ticket, never the reader's own token: see `RemoteServer::tickets`.
+    if !query.get("ticket").is_some_and(|t| server.knows_ticket(t)) {
         return respond(&mut stream, 403, "text/plain", b"forbidden").await;
     }
     let Some(path) = query.get("path") else {
         return respond(&mut stream, 400, "text/plain", b"no path").await;
     };
 
-    let path = PathBuf::from(path);
+    let Some(path) = attachment_path(path) else {
+        return respond(&mut stream, 403, "text/plain", b"forbidden").await;
+    };
     let too_big = std::fs::metadata(&path).map(|m| m.len() > MAX_ASSET).unwrap_or(true);
     if too_big {
         return respond(&mut stream, 404, "text/plain", b"not found").await;
@@ -358,6 +414,22 @@ async fn serve_asset(mut stream: TcpStream, head: &str, peeked: usize, token: &s
         Ok(bytes) => respond(&mut stream, 200, content_type(&path), &bytes).await,
         Err(_) => respond(&mut stream, 404, "text/plain", b"not found").await,
     }
+}
+
+/// The one directory this endpoint may read, or `None`.
+///
+/// The path arrives from the client, and this reads a file and sends it back,
+/// so without the check a ticket reads anything the user can — `~/.ssh` and the
+/// rest. Transcript images are the whole purpose, and they are archived under
+/// `~/.dray/attachments`, so that is the boundary. The same reading
+/// `recordings::read` takes of its own directory.
+///
+/// Canonicalized on both sides: `..` is what a traversal is spelled with, and a
+/// symlinked home makes a written-path comparison find nothing.
+fn attachment_path(raw: &str) -> Option<PathBuf> {
+    let root = std::env::home_dir()?.join(".dray").join("attachments").canonicalize().ok()?;
+    let path = PathBuf::from(raw).canonicalize().ok()?;
+    path.starts_with(&root).then_some(path)
 }
 
 fn content_type(path: &Path) -> &'static str {
@@ -427,6 +499,23 @@ mod tests {
     #[test]
     fn decodes_a_percent_escaped_path() {
         assert_eq!(percent_decode("%2Fhome%2Fa%20b.png"), "/home/a b.png");
+    }
+
+    #[test]
+    fn secrets_compare_without_short_circuiting() {
+        assert!(constant_time_eq("abc", "abc"));
+        assert!(!constant_time_eq("abc", "abd"));
+        // Length alone must not decide it, or the answer leaks on its own.
+        assert!(!constant_time_eq("abc", "abcd"));
+        assert!(!constant_time_eq("", "a"));
+        assert!(constant_time_eq("", ""));
+    }
+
+    #[test]
+    fn an_asset_path_outside_the_attachments_directory_is_refused() {
+        assert!(attachment_path("/etc/passwd").is_none());
+        assert!(attachment_path("/home/../etc/passwd").is_none());
+        assert!(attachment_path("").is_none());
     }
 
     #[test]

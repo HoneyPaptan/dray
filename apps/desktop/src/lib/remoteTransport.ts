@@ -51,6 +51,10 @@ class RemoteTransport {
   #backoff = RECONNECT_MIN_MS;
   #retry: ReturnType<typeof setTimeout> | null = null;
   #queue: string[] = [];
+  /// What image URLs are signed with, handed over once the socket has
+  /// authenticated. Never the endpoint's own token — that opens the socket,
+  /// which can create sessions and send prompts, and a URL ends up in the DOM.
+  #assetTicket: string | null = null;
 
   get status(): RemoteStatus {
     return this.#status;
@@ -106,6 +110,7 @@ class RemoteTransport {
     socket.onclose = () => {
       if (this.#socket !== socket) return;
       this.#socket = null;
+      this.#assetTicket = null;
       this.#setStatus("closed");
       // Every outstanding call is unanswerable now; leaving them pending would
       // hang the caller for the life of the app.
@@ -136,6 +141,10 @@ class RemoteTransport {
       return;
     }
     if ("event" in frame) {
+      if (frame.event === "remote_ready") {
+        this.#assetTicket = (frame.payload as { asset?: string } | null)?.asset ?? null;
+        return;
+      }
       const handlers = this.#handlers.get(frame.event);
       if (handlers) for (const handler of [...handlers]) handler({ payload: frame.payload });
       return;
@@ -179,9 +188,15 @@ class RemoteTransport {
 
   assetUrl(path: string): string {
     const endpoint = readEndpoint();
-    if (!endpoint) return path;
+    // An image is fetched by the webview's own `<img>`, which can carry no
+    // header, so the credential has to ride the query string — which is why it
+    // is a per-connection ticket and not the reader's token. Before one has
+    // arrived there is nothing to sign with, and an empty `src` draws nothing
+    // rather than sending an unauthorised request.
+    if (!endpoint || !this.#assetTicket) return "";
     const base = endpoint.url.replace(/^ws/, "http").replace(/\/$/, "");
-    return `${base}/asset?token=${encodeURIComponent(endpoint.token)}&path=${encodeURIComponent(path)}`;
+    const ticket = encodeURIComponent(this.#assetTicket);
+    return `${base}/asset?ticket=${ticket}&path=${encodeURIComponent(path)}`;
   }
 }
 
