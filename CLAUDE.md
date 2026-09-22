@@ -51,8 +51,10 @@ pnpm workspace, two apps, no shared package yet.
 
 ```
 apps/desktop/   the Tauri app — everything below this section describe it
-apps/cli/       the `dray` CLI — own crate, own release tag, the app's only
-                inbound channel; see Orchestration
+apps/cli/       the `dray` CLI — own crate, own release tag, one of the app's
+                two inbound channels; see Orchestration
+apps/mobile/    the Android shell — own Tauri crate, no commands of its own,
+                serving the desktop app's own frontend; see The phone client
 ```
 
 **This fork carry no `apps/web`.** Upstream keep a marketing site there (Next.js
@@ -554,6 +556,93 @@ Order is load-bearing at both ends: unlock before remove because the lock refuse
 **Already-gone trees ask nothing** — disposition is read *before* deciding whether to ask. **Delete takes the tree with it, no second question**, folded into `SessionManager::delete` best-effort; a failed removal there orphans the tree, and `git worktree remove` by hand is the recovery.
 
 **Settle and delete both stop the session, and the stop is the whole process tree** (`SessionManager::settle`): the child, everything it started, and its browser tabs. `child.kill()` alone signals the agent's pid, so a `run_in_background` Bash or a dev server survived a delete under launchd. The descendants are read with `local_servers::descendants` and signalled **before** the child dies, straight off the walk: a dead parent's children are reparented and the walk loses them, and a pid held across the parent's shutdown could be another process's by the time it is signalled. Tabs close whatever the kill answered. A respawn keeps `kill` alone: the dev server should survive an effort change. Settle is refused mid-turn by the sidebar for this reason. The log and index entry stay, and unsettle resumes as any idle session does.
+
+## The phone client
+
+**The same React app, running on a phone, against the agent runtime on the
+laptop.** Nothing about the agent half moves: `cpal` is ALSA, `notify-rust` is
+D-Bus, `git2`, `transcribe-cpp` and `heed` are C and cmake, and `claude`,
+`codex` and `grok` cannot run on a phone at all. That is *why* the phone is a
+client rather than a second host.
+
+**One seam, and every feature goes through it** ([transport.ts](apps/desktop/src/lib/transport.ts)).
+`call` replaces `invoke`, `subscribeEvent` replaces `listen`, `assetUrl`
+replaces `convertFileSrc` — 97 distinct commands across 33 files, 14 events
+across 7. **`IS_REMOTE` is build-time, not runtime**, because the phone shell is
+itself a Tauri app: "am I inside Tauri" cannot tell the two builds apart. It
+reads `VITE_DRAY_REMOTE`, set by `.env.mobile` and nothing else, so the desktop
+build cannot reach the remote path by accident.
+
+**`subscribeEvent` hands the handler Tauri's own `{ payload }` envelope** rather
+than the payload alone, so a call site reads identically on either side of the
+seam. The name is not `subscribe`: three modules here already export one of
+those for `useSyncExternalStore`, and a collision in a file that has both is a
+rename waiting to be got wrong.
+
+**The server lives inside the desktop app, and the desktop *webview* is what
+runs a phone's commands** ([serve.rs](apps/desktop/src-tauri/src/serve.rs)).
+Tauri offers no way to dispatch a registered command by name at runtime, so a
+second dispatcher in Rust would be 92 hand-written arms falling out of step the
+first time a command is added. Relaying instead costs one hop and stays correct
+by construction: the socket emits `remote_call`, [remoteExecutor.ts](apps/desktop/src/lib/remoteExecutor.ts)
+invokes it with the **raw** `invoke` — routing through the seam there would send
+a phone's command straight back out to the phone — and answers with
+`remote_reply`. **The price is stated rather than hidden: the desktop window has
+to be open for the phone to reach anything.** A headless `dray serve` is the
+same wire protocol with that dispatcher replaced.
+
+**Events need no relay at all.** `Manager::emit` calls `listeners.emit` beside
+`emit_js`, so a Rust `listen_any` receives everything the webview does — read
+out of `tauri-2.11.5/src/manager/mod.rs:534`, and measured: a `doc_changed`
+raised by the file watcher arrived at a socket client with no frontend involved.
+`FORWARDED_EVENTS` is therefore a list of names rather than a hook, since the
+listener is per name and there is no every-event one. Nothing here uses
+`emit_to`, whose filter a remote client is not a target of.
+
+- **The token is the first frame, not a header and not the query string.** A
+  browser cannot put a header on a websocket, and the handshake is gone by the
+  time frames are being read. Ordering is what makes it safe: the server refuses
+  every frame until it has seen one carrying the token. Minted once into
+  `~/.dray/remote-token` at `0600`, **mode on the create** — `fs::write` plus a
+  later chmod leaves a window where the token is world-readable, the same
+  reading the tracker credential's own write records.
+- **Loopback plus the tailnet address, never `0.0.0.0`.** Two listeners, the
+  second only where `tailscale ip -4` answers. A bind that fails costs the
+  feature and is logged; it never costs the app, which is orchestration's own
+  bargain one section up.
+- **One port serves both a websocket and one asset read, told apart by `peek`.**
+  The bytes stay in the socket, so the websocket handshake still parses the
+  request for itself. Assets are the images a transcript draws, which the asset
+  protocol cannot reach from another machine.
+- **`DRAY_SERVE_PORT` exists so a dev build and a release build can both run.**
+  Both default to 8787 and whichever binds first wins, silently — the same trap
+  `dray-dev.sock` already names for orchestration.
+
+**The shell is its own crate** (`apps/mobile`), because `apps/desktop/src-tauri`
+cannot cross-compile to Android and never will. It carries the opener and dialog
+plugins and no commands of its own; the frontend is the desktop app's, built
+with `pnpm build:mobile` into `apps/desktop/dist-mobile`. **Android needs
+rustup** — a pacman `rust` has only the host std — installed beside the system
+toolchain with `--no-modify-path`, so `~/.cargo/bin` is prepended for Android
+commands alone and desktop builds keep their own cache.
+
+**Narrow is a width, not the build** ([phoneLayout.ts](apps/desktop/src/lib/phoneLayout.ts)):
+under 820px the sidebar is drawn over the chat and the right panel takes the
+window whole, which a narrow desktop window gets too. **Neither is unmounted** —
+a sidebar that comes back rebuilt loses its scroll and its open groups, and the
+panel holds reads it would have to make again. The crew is the one thing
+withheld: a fixed 320px column has nowhere to stand beside a phone's transcript.
+Picking a session closes the drawer, since the row the reader pressed is
+covering the thing they pressed it for.
+
+**Dictation draws nothing on the phone.** The engine is cmake and C++, the
+capture is ALSA, and the runtime is on another machine — and Android's keyboard
+already offers voice input.
+
+**Not built yet:** push notifications with the app closed (the laptop's banner
+still fires on the laptop), and resume-from-`seq` on reconnect — the transport
+reconnects and the app refetches, where the event model could hand back exactly
+the gap.
 
 ## Orchestration
 
