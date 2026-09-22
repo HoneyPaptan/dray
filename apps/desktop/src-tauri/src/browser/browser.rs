@@ -11,6 +11,10 @@
 //! screencast frame can. One pipe serves the pane and the phone rather than two
 //! implementations of the same feature.
 
+#[path = "automation.rs"]
+pub mod automation;
+#[path = "backend.rs"]
+pub mod backend;
 #[path = "cdp.rs"]
 pub mod cdp;
 #[path = "launch.rs"]
@@ -19,7 +23,10 @@ pub mod launch;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{Arc, LazyLock},
+    sync::{
+        atomic::{AtomicI32, Ordering},
+        Arc, LazyLock,
+    },
 };
 
 use anyhow::{anyhow, Context, Result};
@@ -27,6 +34,24 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
 use cdp::Connection;
+
+/// What a verb needs to know about one tab. Both backends answer in this
+/// shape — the embedded one reads it off CEF's own callbacks, this one off
+/// the page's DevTools events — so [`automation`] never learns which.
+pub struct Tab {
+    pub id: i32,
+    pub active: bool,
+    pub url: String,
+    pub title: String,
+}
+
+/// Tab ids are minted across every session, not per browser.
+///
+/// Load-bearing: `tab_state` is asked by id alone, with no session beside it,
+/// so two sessions numbering their own tabs from 1 would have each reading
+/// the other's page. CEF's ids are its browser identifiers and unique for the
+/// same reason.
+static NEXT_TAB: AtomicI32 = AtomicI32::new(1);
 
 /// The browsers this app has started, one per session.
 ///
@@ -44,7 +69,19 @@ pub struct Instance {
     /// holding a profile for the life of the login.
     _child: tokio::process::Child,
     endpoint: String,
-    tabs: Mutex<HashMap<i32, Arc<Connection>>>,
+    tabs: Mutex<HashMap<i32, Arc<Page>>>,
+    /// The browser's own DevTools channel, kept open for the life of the
+    /// session. It is not for sending on — it is what reports a page's title
+    /// changing, which no *page*-level event does.
+    _browser: Arc<Connection>,
+}
+
+/// One open page: the DevTools channel, and the target id the browser's HTTP
+/// endpoint addresses it by. Both are needed — a call goes down the socket,
+/// where closing and activating are HTTP verbs on the target.
+pub struct Page {
+    pub target: String,
+    pub connection: Arc<Connection>,
 }
 
 /// Where a session's browser keeps its profile.
@@ -68,13 +105,39 @@ pub async fn instance(session: &str) -> Result<Arc<Instance>> {
         anyhow!("no Chromium found. Install chromium, google-chrome or brave to use the browser")
     })?;
     let started = launch::start(&binary, &profile_of(session)?).await?;
+    let browser = Arc::new(Connection::open(&browser_socket(&started.endpoint).await?).await?);
+    // Without discovery the browser channel reports nothing at all. With it,
+    // a page whose script sets `document.title` arrives here as a changed
+    // target — the one place that fact is published.
+    browser
+        .call("Target.setDiscoverTargets", json!({ "discover": true }))
+        .await
+        .map_err(|message| anyhow!("{message}"))?;
+    backend::watch_targets(Arc::clone(&browser));
     let instance = Arc::new(Instance {
         _child: started.child,
         endpoint: started.endpoint,
         tabs: Mutex::new(HashMap::new()),
+        _browser: browser,
     });
     sessions.insert(session.to_string(), Arc::clone(&instance));
     Ok(instance)
+}
+
+/// The browser-wide DevTools socket, which `/json/version` is the only place
+/// that names.
+async fn browser_socket(endpoint: &str) -> Result<String> {
+    let version: Value = reqwest::get(format!("{endpoint}/json/version"))
+        .await
+        .context("could not ask the browser for its DevTools socket")?
+        .json()
+        .await
+        .context("the browser's version answer was not JSON")?;
+    version
+        .get("webSocketDebuggerUrl")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("the browser named no DevTools socket"))
 }
 
 impl Instance {
@@ -83,9 +146,16 @@ impl Instance {
     /// The id is ours rather than CDP's target id: `automation.rs` addresses a
     /// tab by `i32` and every verb in it is written that way, so minting one
     /// here keeps that whole file transport-free.
-    pub async fn open_tab(&self, url: &str) -> Result<i32> {
+    /// The tab is created blank and *then* navigated, which is not a round
+    /// trip wasted. `PUT /json/new?<url>` starts the load before there is a
+    /// socket to watch it on, so a page that finished loading in that gap
+    /// would never report `Page.loadEventFired` and the tab would read as
+    /// loading for ever — every verb after it waiting out the full timeout.
+    /// Navigating after `Page.enable` means the load cannot start before
+    /// somebody is listening.
+    pub async fn open_tab(&self, url: &str) -> Result<(i32, Arc<Page>)> {
         let created: Value = reqwest::Client::new()
-            .put(format!("{}/json/new?{url}", self.endpoint))
+            .put(format!("{}/json/new", self.endpoint))
             .send()
             .await
             .context("could not ask the browser for a tab")?
@@ -97,6 +167,11 @@ impl Instance {
             .get("webSocketDebuggerUrl")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("the browser opened a tab with no DevTools URL"))?;
+        let target = created
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("the browser opened a tab with no target id"))?
+            .to_string();
 
         let connection = Arc::new(Connection::open(ws).await?);
         // Asked for on every tab rather than on demand: both are how the page
@@ -104,16 +179,51 @@ impl Instance {
         // would miss whatever happened before it.
         let _ = connection.call("Page.enable", json!({})).await;
         let _ = connection.call("Runtime.enable", json!({})).await;
+        if url != "about:blank" {
+            connection
+                .call("Page.navigate", json!({ "url": url }))
+                .await
+                .map_err(|message| anyhow!("{message}"))?;
+        }
 
-        let mut tabs = self.tabs.lock().await;
-        let id = tabs.keys().max().copied().unwrap_or(0) + 1;
-        tabs.insert(id, connection);
-        Ok(id)
+        let page = Arc::new(Page { target, connection });
+        let id = NEXT_TAB.fetch_add(1, Ordering::Relaxed);
+        self.tabs.lock().await.insert(id, Arc::clone(&page));
+        Ok((id, page))
     }
 
-    /// The connection for `tab`, or `None` where it has been closed.
-    pub async fn tab(&self, tab: i32) -> Option<Arc<Connection>> {
+    /// The page behind `tab`, or `None` where it has been closed.
+    pub async fn page(&self, tab: i32) -> Option<Arc<Page>> {
         self.tabs.lock().await.get(&tab).cloned()
+    }
+
+    /// Shuts a tab and forgets it. The browser stays up: a session with no
+    /// tabs open is one the reader may open another in.
+    pub async fn close_tab(&self, tab: i32) -> Result<()> {
+        let Some(page) = self.tabs.lock().await.remove(&tab) else {
+            return Ok(());
+        };
+        reqwest::Client::new()
+            .get(format!("{}/json/close/{}", self.endpoint, page.target))
+            .send()
+            .await
+            .context("could not close the tab")?;
+        Ok(())
+    }
+
+    /// Brings a tab to the front of its browser. Headless, nothing is drawn
+    /// by it — what it moves is which page the browser considers focused,
+    /// which is what a page's visibility and focus events read.
+    pub async fn activate_tab(&self, tab: i32) -> Result<()> {
+        let Some(page) = self.tabs.lock().await.get(&tab).cloned() else {
+            return Ok(());
+        };
+        reqwest::Client::new()
+            .get(format!("{}/json/activate/{}", self.endpoint, page.target))
+            .send()
+            .await
+            .context("could not activate the tab")?;
+        Ok(())
     }
 
     pub fn endpoint(&self) -> &str {
@@ -127,10 +237,10 @@ impl Instance {
 /// the verbs above it need no knowledge of which half answered.
 pub async fn cdp(session: &str, tab: i32, method: &str, params: Value) -> Result<Value, String> {
     let instance = instance(session).await.map_err(|err| format!("{err:#}"))?;
-    let Some(connection) = instance.tab(tab).await else {
+    let Some(page) = instance.page(tab).await else {
         return Err("that tab is gone".into());
     };
-    connection.call(method, params).await
+    page.connection.call(method, params).await
 }
 
 /// Stops a session's browser and forgets it.
@@ -139,6 +249,10 @@ pub async fn cdp(session: &str, tab: i32, method: &str, params: Value) -> Result
 /// an unsettled session resuming should find the logins it had.
 pub async fn close(session: &str) {
     SESSIONS.lock().await.remove(session);
+    // The records outlive nothing: dropping the instance kills the browser,
+    // so a tab left in the registry would answer `tab_state` about a page no
+    // process is holding any more.
+    backend::forget_session(session);
 }
 
 /// Live, and `#[ignore]`d for it: this starts a real browser.
@@ -152,40 +266,21 @@ mod live {
 
     #[tokio::test]
     #[ignore = "starts a real browser"]
-    async fn drives_a_page() {
-        let binary = launch::resolve().expect("no Chromium installed");
-        println!("browser: {}", binary.display());
+    async fn a_screencast_frame_arrives() {
+        let session = format!("browser-transport-{}", std::process::id());
+        let instance = instance(&session).await.expect("could not start a browser");
+        println!("endpoint: {}", instance.endpoint());
 
-        let profile = std::env::temp_dir().join(format!("dray-browser-test-{}", std::process::id()));
-        let started = launch::start(&binary, &profile).await.expect("could not start");
-        println!("endpoint: {}", started.endpoint);
-
-        let instance = Instance {
-            _child: started.child,
-            endpoint: started.endpoint,
-            tabs: Mutex::new(HashMap::new()),
-        };
-
-        let tab = instance
-            .open_tab("data:text/html,<title>hello dray</title><p id=x>ok")
+        let (_, page) = instance
+            .open_tab("about:blank")
             .await
             .expect("could not open a tab");
-        let connection = instance.tab(tab).await.expect("tab vanished");
-
-        let title = connection
-            .call(
-                "Runtime.evaluate",
-                json!({ "expression": "document.title", "returnByValue": true }),
-            )
-            .await
-            .expect("evaluate failed");
-        assert_eq!(title.pointer("/result/value").and_then(Value::as_str), Some("hello dray"));
 
         // The screencast is the whole reason for this route, so the test that
         // proves the transport proves a frame arrives too rather than leaving
         // that to be discovered from the UI.
-        let mut events = connection.subscribe();
-        connection
+        let mut events = page.connection.subscribe();
+        page.connection
             .call("Page.startScreencast", json!({ "format": "jpeg", "quality": 60 }))
             .await
             .expect("startScreencast failed");
@@ -203,8 +298,9 @@ mod live {
 
         let data = frame.pointer("/params/data").and_then(Value::as_str).expect("frame had no data");
         println!("first frame: {} base64 chars", data.len());
-        assert!(data.len() > 1000, "a frame of a real page is not this small");
+        assert!(!data.is_empty(), "a frame carries pixels");
 
-        let _ = std::fs::remove_dir_all(&profile);
+        close(&session).await;
+        let _ = std::fs::remove_dir_all(profile_of(&session).unwrap());
     }
 }

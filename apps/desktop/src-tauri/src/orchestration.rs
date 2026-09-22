@@ -228,21 +228,17 @@ async fn dispatch(request: Request, app: &AppHandle) -> Result<Response> {
     }
 }
 
-/// One `dray browser` step. The browser is macOS-only and behind a feature,
-/// so the refusal names that rather than reading as a broken CLI.
+/// One `dray browser` step.
+///
+/// Every build has a browser now: an embedded Chromium where this one was
+/// compiled with CEF, and one Dray starts otherwise. So there is no refusal
+/// here any more — a machine with no Chromium installed at all is answered
+/// by the backend, in its own words, naming what to install.
 async fn browse(request: dray_proto::BrowserRequest) -> Result<Response> {
-    #[cfg(all(feature = "cef", target_os = "macos"))]
-    {
-        Ok(match crate::cef::automation::run(&request.session_id, request.action).await {
-            Ok((output, data)) => Response::Browser { output, data },
-            Err(message) => Response::error(message),
-        })
-    }
-    #[cfg(not(all(feature = "cef", target_os = "macos")))]
-    {
-        let _ = request;
-        Ok(Response::error("this build of Dray has no browser"))
-    }
+    Ok(match crate::browser::automation::run(&request.session_id, request.action).await {
+        Ok((output, data)) => Response::Browser { output, data },
+        Err(message) => Response::error(message),
+    })
 }
 
 /// Tags a session that already exists, or untags it.

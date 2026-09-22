@@ -1,32 +1,32 @@
 //! Driving a session's tabs for `dray browser`: the agent's half of the
 //! in-app browser, with agent-browser's verbs.
 //!
-//! No agent-browser and no debug port. CEF hands every browser its own
-//! DevTools channel (`send_dev_tools_message` in, an observer out), so each
-//! action is a few CDP calls on the session's active tab, and an agent can
-//! reach no other session's pages because the session is the only address
-//! there is. Pointer and key actions go through Chromium's real input path
-//! (`Input.dispatch*`) rather than `element.click()`, so what the agent does
-//! is what a person's click does; reads and locators are page JavaScript.
+//! No agent-browser and no debug port of its own. Every action is a few CDP
+//! calls on the session's active tab, and an agent can reach no other
+//! session's pages because the session is the only address there is. Pointer
+//! and key actions go through Chromium's real input path (`Input.dispatch*`)
+//! rather than `element.click()`, so what the agent does is what a person's
+//! click does; reads and locators are page JavaScript.
+//!
+//! **Which browser carries the message is one import.** `be` is
+//! [`super::backend`], which opens, closes and watches tabs on a Chromium
+//! Dray starts; every verb below is written against CDP alone and knows
+//! nothing else about it.
 
-use super::*;
+use super::backend as be;
+
 use base64::Engine;
 use dray_proto::{BrowserAction, Get, Is, Locator};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicI32, Ordering as AtomicOrdering};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tokio::sync::oneshot;
 
 type Reply = Result<Value, String>;
 /// Text for the agent, and the same answer as JSON.
 type Answer = Result<(String, Value), String>;
 
-static NEXT_ID: AtomicI32 = AtomicI32::new(1);
-/// Replies land on the UI thread keyed by (browser, message id); the caller
-/// waits on the other end of its channel.
-static PENDING: Mutex<Option<HashMap<(i32, i32), oneshot::Sender<Reply>>>> = Mutex::new(None);
-/// What each tab's page logged since `console`/`errors` last drained it.
-static CONSOLE: Mutex<Option<HashMap<i32, Vec<(bool, String)>>>> = Mutex::new(None);
 /// The size `set viewport`/`set device` asked for, per session. Only
 /// `screenshot` reads it: the widget stays the pane's size and the page is
 /// laid out at this size for the capture alone.
@@ -43,56 +43,15 @@ static VIEWPORT: Mutex<Option<HashMap<String, (u32, u32)>>> = Mutex::new(None);
 /// for one; the pane itself is a third of a window and lays a page out at
 /// phone breakpoints.
 const DEFAULT_VIEWPORT: (u32, u32) = (1440, 900);
-/// One capture at a time: the override is tab-wide, so two overlapping
-/// screenshots would clear each other's, and requests off the socket are
-/// not serialized. ponytail: one lock app-wide, per-tab if captures ever
-/// queue behind each other.
-static CAPTURING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-/// The pane saying it has the page covered, so the reflow the capture needs
-/// happens behind a still rather than on screen. Waited on rather than
-/// guessed at: the cover is a page snapshot, an image decode and a layout
-/// call, which is a few hundred milliseconds on a good day and not a number
-/// worth hardcoding.
-///
-/// **An ack names the shot it is for, and a bare `Notify` was not enough.**
-/// One shot can be acked twice — the pane answers at once when it has
-/// nothing to cover, and the hide it asked for answers again when it lands
-/// — so the extra notification sat as a stored permit and released the
-/// *next* shot before its own still was painted, showing exactly the reflow
-/// this hides. `SHUTTER_ACK` carries how far the pane has got, the `Notify`
-/// only wakes the waiter to look, and a shot sleeps until the number
-/// reaches its own. A late ack from a finished shot is then a number too
-/// small to release anything.
-static SHUTTER_READY: tokio::sync::Notify = tokio::sync::Notify::const_new();
-/// The newest shot's number, minted per capture.
-static SHUTTER_SHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// The newest shot the pane has answered for. Monotonic, so a repeated ack
-/// for one shot is the same answer twice rather than a second one.
-static SHUTTER_ACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// True from the shutter opening until the override goes on — the window in
-/// which the page still reads the way the reader sees it, and the one thing
-/// that lets the pane's cover picture past `CAPTURING`.
-static SHUTTER_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// How long to wait for that. A pane with no browser on screen answers at
-/// once; this is for one that never answers at all, where giving up and
-/// shooting anyway is exactly what the verb did before it covered anything.
-const SHUTTER: Duration = Duration::from_millis(700);
-/// One repaint's worth of time, spent at all three edges of a shot, each
-/// one a frame where the wrong thing would otherwise be on screen: after
-/// the view is hidden, since hiding lands on the window's next frame and
-/// the override must not paint into one still holding it; after the
-/// override goes on, or the shot catches the layout half-moved; and after
-/// it comes off, or the view is handed back still showing the size it was
-/// photographed at, which is this whole dance's own reflow arriving at the
-/// end instead of the start.
+/// One repaint's worth of time, spent after the metrics override goes on:
+/// a page that reflows paints a frame or two later, and capturing inside
+/// that window catches the layout half-moved. The backends spend it at the
+/// other two edges of a shot, where what is being waited for is a widget.
 const SETTLE: Duration = Duration::from_millis(150);
-
-const TIMEOUT: Duration = Duration::from_secs(30);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 /// Snapshots and page text are for a model to read; past this they cost more
 /// than they say.
 const MAX_TEXT: usize = 40_000;
-const MAX_CONSOLE: usize = 200;
 
 /// The pane's device presets, by name. Duplicated from `VIEWPORT_PRESETS`
 /// in browser.ts, since the refusal for an unknown name has to come from
@@ -107,95 +66,11 @@ const DEVICES: &[(&str, u32, u32)] = &[
     ("Desktop", 1440, 900),
 ];
 
-wrap_dev_tools_message_observer! {
-    struct DrayDevTools;
-
-    impl DevToolsMessageObserver {
-        fn on_dev_tools_method_result(
-            &self,
-            browser: Option<&mut Browser>,
-            message_id: ::std::os::raw::c_int,
-            success: ::std::os::raw::c_int,
-            result: Option<&[u8]>,
-        ) {
-            let Some(id) = browser.map(|b| b.identifier()) else { return };
-            let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(id, message_id))) else {
-                return;
-            };
-            let value = result
-                .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
-                .unwrap_or(Value::Null);
-            let reply = if success != 0 {
-                Ok(value)
-            } else {
-                Err(value
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("the page refused the command")
-                    .to_string())
-            };
-            let _ = tx.send(reply);
-        }
-    }
-}
-
-/// Attach the observer to a browser the moment it exists; the registration
-/// lives on the tab and ends with it.
-pub(super) fn observe(browser: &Browser) -> Option<Registration> {
-    browser
-        .host()
-        .and_then(|host| host.add_dev_tools_message_observer(Some(&mut DrayDevTools::new())))
-}
-
-/// Called from `on_console_message` for every line a page logs.
-pub(super) fn log(tab: i32, error: bool, text: String) {
-    let mut guard = CONSOLE.lock().unwrap();
-    let lines = guard.get_or_insert_with(HashMap::new).entry(tab).or_default();
-    if lines.len() >= MAX_CONSOLE {
-        lines.remove(0);
-    }
-    lines.push((error, text));
-}
-
-pub(super) fn forget(tab: i32) {
-    if let Some(m) = CONSOLE.lock().unwrap().as_mut() {
-        m.remove(&tab);
-    }
-}
-
-/// One CDP call on one tab.
-async fn cdp(tab: i32, method: &str, params: Value) -> Reply {
-    let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
-    let (tx, rx) = oneshot::channel();
-    PENDING.lock().unwrap().get_or_insert_with(HashMap::new).insert((tab, id), tx);
-    let message = json!({ "id": id, "method": method, "params": params }).to_string();
-    on_main(move || {
-        let sent = browser_of(tab)
-            .and_then(|b| b.host())
-            .map(|host| host.send_dev_tools_message(Some(message.as_bytes())) == 1)
-            .unwrap_or(false);
-        if !sent {
-            if let Some(tx) = PENDING.lock().unwrap().as_mut().and_then(|m| m.remove(&(tab, id))) {
-                let _ = tx.send(Err("that tab is gone".into()));
-            }
-        }
-    })?;
-    match tokio::time::timeout(TIMEOUT, rx).await {
-        Ok(Ok(reply)) => reply,
-        Ok(Err(_)) => Err("the tab closed before answering".into()),
-        Err(_) => {
-            if let Some(m) = PENDING.lock().unwrap().as_mut() {
-                m.remove(&(tab, id));
-            }
-            Err(format!("{method} timed out after {}s", TIMEOUT.as_secs()))
-        }
-    }
-}
-
 /// Runs `expression` in the page and answers its value. A thrown error is
 /// the error.
-async fn eval(tab: i32, expression: &str) -> Reply {
-    let reply = cdp(
+async fn eval(session: &str, tab: i32, expression: &str) -> Reply {
+    let reply = be::cdp(
+        session,
         tab,
         "Runtime.evaluate",
         json!({ "expression": expression, "returnByValue": true, "awaitPromise": true }),
@@ -214,12 +89,12 @@ async fn eval(tab: i32, expression: &str) -> Reply {
 
 /// Runs `body` with `el` bound to the located element, or fails naming what
 /// was looked for.
-async fn with_element(tab: i32, at: &Locator, body: &str) -> Reply {
+async fn with_element(session: &str, tab: i32, at: &Locator, body: &str) -> Reply {
     let js = format!(
         "(() => {{ {HELPERS_JS} const el = __find({})[0]; if (!el) return {{ __missing: true }}; {body} }})()",
         serde_json::to_string(at).unwrap()
     );
-    let value = eval(tab, &js).await?;
+    let value = eval(session, tab, &js).await?;
     if value.get("__missing").is_some() {
         return Err(format!("nothing matches {}", describe_locator(at)));
     }
@@ -241,14 +116,6 @@ fn describe_locator(at: &Locator) -> String {
     }
 }
 
-fn tab_state(tab: i32) -> Option<(String, String, bool)> {
-    TABS.lock()
-        .unwrap()
-        .iter()
-        .find(|t| t.id == tab)
-        .map(|t| (t.url.clone(), t.title.clone(), t.loading))
-}
-
 /// Waits for the tab's load to settle. A navigation takes a moment to
 /// start — a click's reply lands before the renderer has begun leaving the
 /// page — so this first watches for loading to *begin*, up to a short
@@ -259,7 +126,7 @@ async fn wait_loaded(tab: i32) -> Result<(), String> {
     let start = Instant::now();
     let mut seen_loading = false;
     while start.elapsed() < LOAD_TIMEOUT {
-        match tab_state(tab) {
+        match be::tab_state(tab) {
             Some((_, _, true)) => seen_loading = true,
             Some(_) if seen_loading || start.elapsed() > Duration::from_millis(600) => return Ok(()),
             Some(_) => {}
@@ -288,7 +155,7 @@ fn web_url(url: &str) -> Result<(), String> {
 
 /// A tab id the caller may act on: one of this session's.
 fn owned(session: &str, id: i32) -> Result<i32, String> {
-    if tabs_of(session).iter().any(|t| t.id == id) {
+    if be::tabs(session).iter().any(|t| t.id == id) {
         Ok(id)
     } else {
         Err(format!("no tab {id} in this session; `dray browser tab` lists them"))
@@ -296,13 +163,13 @@ fn owned(session: &str, id: i32) -> Result<i32, String> {
 }
 
 fn active_tab(session: &str) -> Result<i32, String> {
-    active_id(session).ok_or_else(|| {
+    be::active(session).ok_or_else(|| {
         "no tab is open in this session's browser; `dray browser open <url>` first".to_string()
     })
 }
 
 fn page(tab: i32) -> (String, Value) {
-    match tab_state(tab) {
+    match be::tab_state(tab) {
         Some((url, title, _)) => {
             let text = if title.is_empty() { url.clone() } else { format!("{title} — {url}") };
             (text, json!({ "url": url, "title": title }))
@@ -315,7 +182,7 @@ fn page(tab: i32) -> (String, Value) {
 async fn new_tab(session: &str, before: &[i32]) -> Result<i32, String> {
     let start = Instant::now();
     loop {
-        if let Some(id) = tabs_of(session).iter().map(|t| t.id).find(|id| !before.contains(id)) {
+        if let Some(id) = be::tabs(session).iter().map(|t| t.id).find(|id| !before.contains(id)) {
             return Ok(id);
         }
         if start.elapsed() > LOAD_TIMEOUT {
@@ -325,18 +192,19 @@ async fn new_tab(session: &str, before: &[i32]) -> Result<i32, String> {
     }
 }
 
-async fn mouse(tab: i32, kind: &str, x: f64, y: f64, extra: Value) -> Result<(), String> {
+async fn mouse(session: &str, tab: i32, kind: &str, x: f64, y: f64, extra: Value) -> Result<(), String> {
     let mut params = json!({ "type": kind, "x": x, "y": y });
     params.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
-    cdp(tab, "Input.dispatchMouseEvent", params).await.map(|_| ())
+    be::cdp(session, tab, "Input.dispatchMouseEvent", params).await.map(|_| ())
 }
 
 /// The viewport centre of the element, scrolled into view first so a click
 /// lands on it rather than on whatever covers an off-screen point — and
 /// refused where something else *does* cover that point, since the click
 /// would land on the cover and report success.
-async fn center(tab: i32, at: &Locator) -> Result<(f64, f64), String> {
+async fn center(session: &str, tab: i32, at: &Locator) -> Result<(f64, f64), String> {
     let point = with_element(
+        session,
         tab,
         at,
         "if (!__visible(el)) return { hidden: true }; \
@@ -358,25 +226,25 @@ async fn center(tab: i32, at: &Locator) -> Result<(f64, f64), String> {
     Ok((point["x"].as_f64().unwrap_or(0.0), point["y"].as_f64().unwrap_or(0.0)))
 }
 
-async fn click(tab: i32, at: &Locator, count: u32) -> Result<(), String> {
-    let (x, y) = center(tab, at).await?;
-    mouse(tab, "mouseMoved", x, y, json!({})).await?;
+async fn click(session: &str, tab: i32, at: &Locator, count: u32) -> Result<(), String> {
+    let (x, y) = center(session, tab, at).await?;
+    mouse(session, tab, "mouseMoved", x, y, json!({})).await?;
     for n in 1..=count {
         let button = json!({ "button": "left", "clickCount": n });
-        mouse(tab, "mousePressed", x, y, button.clone()).await?;
-        mouse(tab, "mouseReleased", x, y, button).await?;
+        mouse(session, tab, "mousePressed", x, y, button.clone()).await?;
+        mouse(session, tab, "mouseReleased", x, y, button).await?;
     }
     Ok(())
 }
 
-async fn focus(tab: i32, at: &Locator, clear: bool) -> Result<(), String> {
+async fn focus(session: &str, tab: i32, at: &Locator, clear: bool) -> Result<(), String> {
     let body = format!(
         "el.focus(); if ({clear}) {{ \
            if (el.isContentEditable) el.textContent = ''; \
            else if ('value' in el) {{ el.value = ''; el.dispatchEvent(new Event('input', {{ bubbles: true }})); }} \
          }} return true;"
     );
-    with_element(tab, at, &body).await.map(|_| ())
+    with_element(session, tab, at, &body).await.map(|_| ())
 }
 
 /// The same reading `is checked` takes, so an ARIA switch is toggled rather
@@ -385,22 +253,22 @@ const CHECKED_JS: &str = "if (!/^(checkbox|radio)$/.test(el.type || '') && !/^(c
        return { notCheckable: true }; \
      return !!el.checked || el.getAttribute('aria-checked') === 'true';";
 
-async fn checked(tab: i32, at: &Locator) -> Result<bool, String> {
-    let now = with_element(tab, at, CHECKED_JS).await?;
+async fn checked(session: &str, tab: i32, at: &Locator) -> Result<bool, String> {
+    let now = with_element(session, tab, at, CHECKED_JS).await?;
     if now.get("notCheckable").is_some() {
         return Err(format!("{} is not a checkbox", describe_locator(at)));
     }
     Ok(now == Value::Bool(true))
 }
 
-async fn set_checked(tab: i32, at: &Locator, on: bool) -> Result<(), String> {
-    if checked(tab, at).await? == on {
+async fn set_checked(session: &str, tab: i32, at: &Locator, on: bool) -> Result<(), String> {
+    if checked(session, tab, at).await? == on {
         return Ok(());
     }
-    click(tab, at, 1).await?;
+    click(session, tab, at, 1).await?;
     // A radio cannot be unchecked by clicking, and a custom control may
     // ignore the click; read it back rather than report the click as done.
-    if checked(tab, at).await? != on {
+    if checked(session, tab, at).await? != on {
         return Err(format!("{} did not change when clicked", describe_locator(at)));
     }
     Ok(())
@@ -422,15 +290,13 @@ pub async fn run(session: &str, action: BrowserAction) -> Answer {
             | BrowserAction::Check { .. }
             | BrowserAction::Uncheck { .. }
     );
-    let tab = active_id(session);
+    let tab = be::active(session);
     if let (true, Some(tab)) = (input, tab) {
-        on_main(move || reveal(tab))?;
-        // The renderer learns it is visible a frame later.
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        be::before_input(tab).await?;
     }
     let answer = perform(session, action).await;
     if input {
-        let _ = on_main(apply_layout);
+        be::after_input();
     }
     answer
 }
@@ -441,14 +307,14 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
     match action {
         BrowserAction::Open { url } => {
             web_url(&url)?;
-            let tab = match active_id(session) {
+            let tab = match be::active(session) {
                 Some(tab) => {
-                    browser_open(session.to_string(), url, false)?;
+                    be::open(session, url, false).await?;
                     tab
                 }
                 None => {
-                    let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-                    browser_open(session.to_string(), url, true)?;
+                    let before: Vec<i32> = be::tabs(session).iter().map(|t| t.id).collect();
+                    be::open(session, url, true).await?;
                     new_tab(session, &before).await?
                 }
             };
@@ -462,17 +328,17 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 BrowserAction::Forward => "forward",
                 _ => "reload",
             };
-            browser_nav(session.to_string(), verb.into())?;
+            be::nav(session, verb).await?;
             wait_loaded(tab).await?;
             Ok(page(tab))
         }
         BrowserAction::Close => {
             let tab = active_tab(session)?;
-            browser_close(session.to_string(), tab)?;
+            be::close_tab(session, tab).await?;
             ok(format!("closed tab {tab}"))
         }
         BrowserAction::Tabs => {
-            let tabs = tabs_of(session);
+            let tabs = be::tabs(session);
             let text = if tabs.is_empty() {
                 "no tabs".to_string()
             } else {
@@ -490,8 +356,8 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::TabNew { url } => {
             let url = url.unwrap_or_else(|| "about:blank".into());
             web_url(&url)?;
-            let before: Vec<i32> = tabs_of(session).iter().map(|t| t.id).collect();
-            browser_open(session.to_string(), url, true)?;
+            let before: Vec<i32> = be::tabs(session).iter().map(|t| t.id).collect();
+            be::open(session, url, true).await?;
             let tab = new_tab(session, &before).await?;
             wait_loaded(tab).await?;
             let (text, mut data) = page(tab);
@@ -500,7 +366,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         }
         BrowserAction::TabSwitch { id } => {
             let id = owned(session, id)?;
-            browser_activate(session.to_string(), id)?;
+            be::activate(session, id).await?;
             Ok(page(id))
         }
         BrowserAction::TabClose { id } => {
@@ -508,57 +374,57 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                 Some(id) => owned(session, id)?,
                 None => active_tab(session)?,
             };
-            browser_close(session.to_string(), id)?;
+            be::close_tab(session, id).await?;
             ok(format!("closed tab {id}"))
         }
         BrowserAction::Snapshot { interactive, compact, selector } => {
             let tab = active_tab(session)?;
             let opts = json!({ "interactive": interactive, "compact": compact, "selector": selector });
-            let text = eval(tab, &format!("(() => {{ {HELPERS_JS} return __snapshot({opts}); }})()")).await?;
+            let text = eval(session, tab, &format!("(() => {{ {HELPERS_JS} return __snapshot({opts}); }})()")).await?;
             let text = clip(text.as_str().unwrap_or(""));
             Ok((text.clone(), json!({ "snapshot": text })))
         }
         BrowserAction::Click { at } => {
             let tab = active_tab(session)?;
-            click(tab, &at, 1).await?;
+            click(session, tab, &at, 1).await?;
             wait_loaded(tab).await?;
             ok(format!("clicked {}", describe_locator(&at)))
         }
         BrowserAction::DblClick { at } => {
             let tab = active_tab(session)?;
-            click(tab, &at, 2).await?;
+            click(session, tab, &at, 2).await?;
             ok(format!("double-clicked {}", describe_locator(&at)))
         }
         BrowserAction::Focus { at } => {
-            focus(active_tab(session)?, &at, false).await?;
+            focus(session, active_tab(session)?, &at, false).await?;
             ok(format!("focused {}", describe_locator(&at)))
         }
         BrowserAction::Hover { at } => {
             let tab = active_tab(session)?;
-            let (x, y) = center(tab, &at).await?;
-            mouse(tab, "mouseMoved", x, y, json!({})).await?;
+            let (x, y) = center(session, tab, &at).await?;
+            mouse(session, tab, "mouseMoved", x, y, json!({})).await?;
             ok(format!("hovering {}", describe_locator(&at)))
         }
         BrowserAction::Type { at, text } | BrowserAction::Fill { at, text } => {
             let tab = active_tab(session)?;
-            focus(tab, &at, clear).await?;
-            cdp(tab, "Input.insertText", json!({ "text": text })).await?;
+            focus(session, tab, &at, clear).await?;
+            be::cdp(session, tab, "Input.insertText", json!({ "text": text })).await?;
             ok(format!("{} {}", if clear { "filled" } else { "typed into" }, describe_locator(&at)))
         }
         BrowserAction::Press { key } => {
             let tab = active_tab(session)?;
             let (down, up) = key_events(&key)?;
-            cdp(tab, "Input.dispatchKeyEvent", down).await?;
-            cdp(tab, "Input.dispatchKeyEvent", up).await?;
+            be::cdp(session, tab, "Input.dispatchKeyEvent", down).await?;
+            be::cdp(session, tab, "Input.dispatchKeyEvent", up).await?;
             wait_loaded(tab).await?;
             ok(format!("pressed {key}"))
         }
         BrowserAction::Check { at } => {
-            set_checked(active_tab(session)?, &at, true).await?;
+            set_checked(session, active_tab(session)?, &at, true).await?;
             ok(format!("checked {}", describe_locator(&at)))
         }
         BrowserAction::Uncheck { at } => {
-            set_checked(active_tab(session)?, &at, false).await?;
+            set_checked(session, active_tab(session)?, &at, false).await?;
             ok(format!("unchecked {}", describe_locator(&at)))
         }
         BrowserAction::Select { at, value } => {
@@ -570,7 +436,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                  return {{ found: true, value: opt.value }};",
                 Value::String(value.clone())
             );
-            let reply = with_element(tab, &at, &body).await?;
+            let reply = with_element(session, tab, &at, &body).await?;
             if reply["found"] != Value::Bool(true) {
                 return Err(format!("{} has no option {value:?}", describe_locator(&at)));
             }
@@ -587,11 +453,11 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             };
             // `Input.dispatchMouseEvent` of `mouseWheel` never answers on a
             // page with nothing to scroll; the page's own API always does.
-            eval(tab, &format!("window.scrollBy({dx}, {dy}); window.scrollY")).await?;
+            eval(session, tab, &format!("window.scrollBy({dx}, {dy}); window.scrollY")).await?;
             ok(format!("scrolled {direction} {amount}"))
         }
         BrowserAction::ScrollIntoView { at } => {
-            with_element(active_tab(session)?, &at, "el.scrollIntoView({ block: 'center' }); return true;").await?;
+            with_element(session, active_tab(session)?, &at, "el.scrollIntoView({ block: 'center' }); return true;").await?;
             ok(format!("scrolled to {}", describe_locator(&at)))
         }
         BrowserAction::Get { what, at } => {
@@ -600,15 +466,16 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             let value = match what {
                 Get::Title => page(tab).1["title"].clone(),
                 Get::Url => page(tab).1["url"].clone(),
-                Get::Text => with_element(tab, &at, "return el.innerText ?? el.textContent ?? '';").await?,
-                Get::Html => with_element(tab, &at, "return el.outerHTML;").await?,
-                Get::Value => with_element(tab, &at, "return el.value ?? null;").await?,
+                Get::Text => with_element(session, tab, &at, "return el.innerText ?? el.textContent ?? '';").await?,
+                Get::Html => with_element(session, tab, &at, "return el.outerHTML;").await?,
+                Get::Value => with_element(session, tab, &at, "return el.value ?? null;").await?,
                 Get::Attr { name } => {
                     let body = format!("return el.getAttribute({});", Value::String(name));
-                    with_element(tab, &at, &body).await?
+                    with_element(session, tab, &at, &body).await?
                 }
                 Get::Box => {
                     with_element(
+                        session,
                         tab,
                         &at,
                         "const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height };",
@@ -620,7 +487,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
                         "(() => {{ {HELPERS_JS} return __find({}).length; }})()",
                         serde_json::to_string(&at).unwrap()
                     );
-                    eval(tab, &js).await?
+                    eval(session, tab, &js).await?
                 }
             };
             let text = match &value {
@@ -639,7 +506,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             };
             // No match is `false`; a broken selector or a dead tab is an
             // error, or a typo reads as page state.
-            let value = match with_element(tab, &at, body).await {
+            let value = match with_element(session, tab, &at, body).await {
                 Ok(value) => value,
                 Err(e) if e.starts_with("nothing matches") => Value::Bool(false),
                 Err(e) => return Err(e),
@@ -672,7 +539,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             };
             let start = Instant::now();
             while start.elapsed() < LOAD_TIMEOUT {
-                if eval(tab, &probe).await.unwrap_or(Value::Bool(false)) == Value::Bool(true) {
+                if eval(session, tab, &probe).await.unwrap_or(Value::Bool(false)) == Value::Bool(true) {
                     return ok(format!("{what} is there"));
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
@@ -682,42 +549,25 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::Screenshot { path, full } => {
             let tab = active_tab(session)?;
             let (w, h) = screenshot_size(session);
-            let held = CAPTURING.lock().await;
-            // Numbered before the event goes out, so an ack cannot name a
-            // shot that does not exist yet; `await_shutter` reads the mark
-            // before it waits, so one arriving early is not missed either.
-            let shot = SHUTTER_SHOT.fetch_add(1, AtomicOrdering::AcqRel) + 1;
-            SHUTTER_OPEN.store(true, AtomicOrdering::Release);
-            emit_shooting(session, true, shot);
-            await_shutter(shot).await;
-            // The hide has run, but a hidden view leaves the window on its
-            // next frame — so the page is given one before it is asked to
-            // reflow into a widget that may still be composited.
-            tokio::time::sleep(SETTLE).await;
-            // Closed before the override, never after: past here the page
-            // stops being the one on screen, so a cover taken from it would
-            // be a picture of the very reflow being hidden.
-            SHUTTER_OPEN.store(false, AtomicOrdering::Release);
-            let bytes = capture(tab, w, h, full).await;
+            let held = be::capture_guard().await;
+            // The pane draws the page's own still and hides the view behind
+            // it, so the reflow the capture needs happens off screen. A
+            // backend with no widget on screen answers at once.
+            let shot = be::cover(session).await;
+            let bytes = capture(session, tab, w, h, full).await;
             // Cleared on the failing path too, or one timed-out capture leaves
             // the tab laid out at a width nobody asked for and every later
             // verb reads a page that isn't the one on screen. The shutter
             // closes there for the same reason: a capture that failed must
             // not leave the pane holding the camera card for good.
-            let _ = cdp(tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
-            // The page is back to the pane's size but has not painted it
-            // yet, and handing the view over inside that window puts the
-            // capture's layout on screen for a frame — the reflow, arriving
-            // at the end. The still is holding the pane meanwhile, so this
-            // costs nothing anybody can see.
-            tokio::time::sleep(SETTLE).await;
-            emit_shooting(session, false, shot);
+            let _ = be::cdp(session, tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
+            be::uncover(session, shot).await;
             drop(held);
             let bytes = bytes?;
             let path = match path {
                 Some(p) => screenshot_path(session, &p).await?,
                 None => {
-                    let dir = browser_dir().join("shots");
+                    let dir = be::shots_dir();
                     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
                     let stamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -731,7 +581,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             Ok((shown.clone(), json!({ "path": shown })))
         }
         BrowserAction::Eval { js } => {
-            let value = eval(active_tab(session)?, &js).await?;
+            let value = eval(session, active_tab(session)?, &js).await?;
             let text = match &value {
                 Value::String(s) => s.clone(),
                 Value::Null => "undefined".into(),
@@ -742,12 +592,7 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
         BrowserAction::Console | BrowserAction::Errors => {
             let tab = active_tab(session)?;
             let errors_only = matches!(action, BrowserAction::Errors);
-            let lines: Vec<(bool, String)> = CONSOLE
-                .lock()
-                .unwrap()
-                .as_mut()
-                .and_then(|m| m.remove(&tab))
-                .unwrap_or_default()
+            let lines: Vec<(bool, String)> = be::console_drain(tab)
                 .into_iter()
                 .filter(|(error, _)| *error || !errors_only)
                 .collect();
@@ -805,8 +650,9 @@ fn screenshot_size(session: &str) -> (u32, u32) {
 /// metrics override is the one thing that sizes a page independently of the
 /// widget drawing it. `deviceScaleFactor: 1`, or a 1440-wide request answers
 /// a 2880-wide PNG on a retina screen. The caller clears the override.
-async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String> {
-    cdp(
+async fn capture(session: &str, tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String> {
+    be::cdp(
+        session,
         tab,
         "Emulation.setDeviceMetricsOverride",
         json!({ "width": w, "height": h, "deviceScaleFactor": 1, "mobile": false }),
@@ -817,64 +663,15 @@ async fn capture(tab: i32, w: u32, h: u32, full: bool) -> Result<Vec<u8>, String
     tokio::time::sleep(SETTLE).await;
     let mut params = json!({ "format": "png" });
     if full {
-        let size = eval(tab, "({ w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight })").await?;
+        let size = eval(session, tab, "({ w: document.documentElement.scrollWidth, h: document.documentElement.scrollHeight })").await?;
         params["captureBeyondViewport"] = json!(true);
         params["clip"] = json!({ "x": 0, "y": 0, "width": size["w"], "height": size["h"], "scale": 1 });
     }
-    let reply = cdp(tab, "Page.captureScreenshot", params).await?;
+    let reply = be::cdp(session, tab, "Page.captureScreenshot", params).await?;
     let data = reply["data"].as_str().ok_or("no image came back")?;
     base64::engine::general_purpose::STANDARD
         .decode(data)
         .map_err(|e| format!("bad image data: {e}"))
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ShootingEvent {
-    session_id: String,
-    shooting: bool,
-    /// Which shot, so the pane's ack can name it back. See `SHUTTER_READY`.
-    shot: u64,
-}
-
-/// Lets the shot numbered `shot` through. See `browser_shutter_ready`.
-/// `fetch_max`, so an ack that arrives after a later shot has been answered
-/// for cannot walk the mark backwards, and `notify_waiters` rather than
-/// `notify_one`, which would leave a permit behind for a shot nobody has
-/// taken yet — the bug this numbering exists to close.
-pub fn shutter_ready(shot: u64) {
-    SHUTTER_ACK.fetch_max(shot, AtomicOrdering::Release);
-    SHUTTER_READY.notify_waiters();
-}
-
-/// Waits until the pane has answered for `shot`, or `SHUTTER` passes. The
-/// registration is re-made around every check, or an ack landing between
-/// reading the mark and awaiting would be missed and the shot would sit out
-/// the whole timeout.
-async fn await_shutter(shot: u64) {
-    let _ = tokio::time::timeout(SHUTTER, async {
-        loop {
-            let mut waiting = Box::pin(SHUTTER_READY.notified());
-            waiting.as_mut().enable();
-            if SHUTTER_ACK.load(AtomicOrdering::Acquire) >= shot {
-                return;
-            }
-            waiting.await;
-        }
-    })
-    .await;
-}
-
-/// Opens and closes the pane's shutter. The capture lays the page out at
-/// the asked-for size, and the widget the reader is watching is the one
-/// doing it — so the pane hides the view and draws a camera card for the
-/// length of the shot, rather than showing a page reflowing to a size
-/// nobody asked to look at.
-fn emit_shooting(session: &str, shooting: bool, shot: u64) {
-    if let Some(app) = APP.get() {
-        let _ = app
-            .emit("browser_shooting", ShootingEvent { session_id: session.into(), shooting, shot });
-    }
 }
 
 /// Truncating write that refuses a symlink at the leaf, so a link planted
@@ -1120,22 +917,14 @@ pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
     // be refused — and the cover is what the shot hides behind. Safe
     // precisely there: the shutter opens *before* the override goes on, so
     // the page this reads is the one the reader is looking at.
-    let _held = if SHUTTER_OPEN.load(AtomicOrdering::Acquire) {
-        None
-    } else {
-        Some(
-            tokio::time::timeout(Duration::from_millis(300), CAPTURING.lock())
-                .await
-                .map_err(|_| "a screenshot is in progress")?,
-        )
-    };
+    let _held = if be::shutter_is_open() { None } else { Some(be::try_capture_guard().await?) };
     let tab = active_tab(&session_id)?;
     // `innerWidth`, not the layout viewport's `clientWidth`: that one stops
     // at the scrollbar, and a picture a scrollbar short of the view is
     // stretched across it. The clip is in page coordinates, hence the
     // scroll offset from the metrics.
-    let size = eval(tab, "({ w: innerWidth, h: innerHeight })").await?;
-    let metrics = cdp(tab, "Page.getLayoutMetrics", json!({})).await?;
+    let size = eval(&session_id, tab, "({ w: innerWidth, h: innerHeight })").await?;
+    let metrics = be::cdp(&session_id, tab, "Page.getLayoutMetrics", json!({})).await?;
     let vp = &metrics["cssVisualViewport"];
     let clip = json!({
         "x": vp["pageX"], "y": vp["pageY"],
@@ -1143,7 +932,7 @@ pub async fn browser_snapshot(session_id: String) -> Result<String, String> {
         "scale": 1,
     });
     let params = json!({ "format": "jpeg", "quality": 60, "optimizeForSpeed": true, "clip": clip });
-    let reply = cdp(tab, "Page.captureScreenshot", params).await?;
+    let reply = be::cdp(&session_id, tab, "Page.captureScreenshot", params).await?;
     let data = reply["data"].as_str().ok_or("no image came back")?;
     Ok(format!("data:image/jpeg;base64,{data}"))
 }
@@ -1189,5 +978,73 @@ mod tests {
                 "{name} drifted from VIEWPORT_PRESETS"
             );
         }
+    }
+}
+
+/// Live, and `#[ignore]`d for it: this starts a real browser and drives it
+/// through the same `run` the socket calls.
+///
+/// The one test that proves a verb end to end rather than proving a type.
+/// `about:blank` plus `eval` rather than a fixture page, so it needs no
+/// server and no network — `web_url` refuses `data:` on purpose, and a
+/// listener of our own would be a second thing that can fail.
+/// `cargo test --lib browser::automation::live -- --ignored --nocapture`
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    async fn eval_ok(session: &str, js: &str) -> Value {
+        let (_, data) = run(session, BrowserAction::Eval { js: js.into() })
+            .await
+            .unwrap_or_else(|e| panic!("eval {js:?} failed: {e}"));
+        data["value"].clone()
+    }
+
+    #[tokio::test]
+    #[ignore = "starts a real browser"]
+    async fn drives_a_page_through_the_verbs() {
+        let session = format!("browser-live-{}", std::process::id());
+
+        let (text, _) = run(&session, BrowserAction::Open { url: "about:blank".into() })
+            .await
+            .expect("could not open a tab");
+        println!("open: {text}");
+
+        // A button that records its own click, so the assertion below is
+        // about Chromium's input path rather than about `element.click()`.
+        eval_ok(
+            &session,
+            "document.title = 'dray live'; \
+             window.__hit = false; \
+             document.body.innerHTML = '<button id=b>Go</button>'; \
+             document.getElementById('b').onclick = () => { window.__hit = true }; \
+             1",
+        )
+        .await;
+
+        let (title, _) = run(&session, BrowserAction::Get { what: Get::Title, at: None })
+            .await
+            .expect("get title failed");
+        assert_eq!(title, "dray live", "the tab's own state is what `get title` reads");
+
+        let (_, _) = run(
+            &session,
+            BrowserAction::Click {
+                at: Locator::Role { role: "button".into(), name: Some("Go".into()), exact: false },
+            },
+        )
+        .await
+        .expect("click failed");
+        assert_eq!(eval_ok(&session, "window.__hit").await, Value::Bool(true), "the click reached the page");
+
+        eval_ok(&session, "console.log('hello from the page'); 1").await;
+        let (logged, _) = run(&session, BrowserAction::Console).await.expect("console failed");
+        assert!(logged.contains("hello from the page"), "console drained: {logged}");
+
+        let (tabs, _) = run(&session, BrowserAction::Tabs).await.expect("tabs failed");
+        println!("tabs: {tabs}");
+        assert!(tabs.contains("about:blank"), "the open tab lists itself");
+
+        crate::browser::close(&session).await;
     }
 }

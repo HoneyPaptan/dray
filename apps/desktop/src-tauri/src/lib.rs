@@ -24,15 +24,6 @@ pub mod attachments;
 pub mod binpath;
 #[path = "browser/browser.rs"]
 pub mod browser;
-#[cfg(all(feature = "cef", target_os = "macos"))]
-#[path = "cef/cef.rs"]
-pub mod cef;
-// Compiled without the feature *and* on every platform, and the second half is
-// the same reason as the first: `events.ts` is generated from whatever exports
-// ran, so gating this anywhere drops `ChromiumStatus` from a checked-in file
-// that `BrowserPane` imports — a `cargo test` on Linux would rewrite the type
-// out and break the frontend build with nothing pointing at the cause.
-pub mod chromium;
 mod local_servers;
 pub mod docs;
 pub mod download;
@@ -668,10 +659,6 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // Chromium first: it patches NSApp and starts its pump, and every
-            // window already exists here for it to parent a view into.
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::init(app.handle());
             // A persisted `in_progress` can't be true anymore — no child
             // survived the restart. Spawned, not awaited: the reset needs no
             // window, and the frontend's first fetch lands well after it.
@@ -721,34 +708,7 @@ pub fn run() {
             refresh_models,
             set_fx_provider,
             agent_availability,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_open,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_tabs,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_activate,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_close,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_nav,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_layout,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_shutter_ready,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_zoom,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_devtools,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::browser_pick,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            cef::automation::browser_snapshot,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            chromium::chromium_status,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            chromium::chromium_download,
-            #[cfg(all(feature = "cef", target_os = "macos"))]
-            chromium::chromium_remove,
+            browser::automation::browser_snapshot,
             local_servers::list_local_servers,
             get_settings,
             set_analytics_enabled,

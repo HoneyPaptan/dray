@@ -1431,8 +1431,7 @@ impl SessionManager {
             Some(session) => session.kill_tree().await,
             None => Ok(()),
         };
-        #[cfg(all(feature = "cef", target_os = "macos"))]
-        crate::cef::close_session(session_id);
+        crate::browser::close(session_id).await;
         killed
     }
 
