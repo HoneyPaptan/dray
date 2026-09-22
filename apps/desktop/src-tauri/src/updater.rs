@@ -15,6 +15,11 @@ use ts_rs::TS;
 
 use crate::analytics;
 
+/// This fork ships no releases, so the only manifests in existence are
+/// upstream's macOS builds: a check can never offer anything installable here,
+/// and leaving it on means phoning someone else's feed on a schedule.
+const UPDATES_ENABLED: bool = false;
+
 const STABLE_MANIFEST: &str = "https://monorepo-labs.github.io/dray/stable.json";
 const BETA_MANIFEST: &str = "https://monorepo-labs.github.io/dray/beta.json";
 
@@ -121,6 +126,10 @@ pub async fn check_update(
     channel: UpdateChannel,
     app: AppHandle,
 ) -> Result<(), String> {
+    if !UPDATES_ENABLED {
+        return Ok(());
+    }
+
     let updater = app
         .updater_builder()
         .endpoints(vec![channel.manifest().parse().map_err(|e| format!("{e}"))?])
