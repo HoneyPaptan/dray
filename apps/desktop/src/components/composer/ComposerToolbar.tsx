@@ -77,6 +77,9 @@ type ComposerToolbarProps = {
   /// What the session has spent so far, drawn inside the model picker. Null
   /// where the harness reports no usage at all, which is most of them.
   usage: SessionUsage | null;
+  /// Where to ask what the plan has left — the session's directory, or the
+  /// picked project before one exists.
+  cwd: string | null;
 
   /// Where the session runs is fixed at creation, so the last three controls
   /// only exist before one starts.
@@ -124,6 +127,7 @@ export default function ComposerToolbar({
   onAttach,
   contextUsage,
   usage,
+  cwd,
   isNewSession,
   busy,
 }: ComposerToolbarProps) {
@@ -170,6 +174,7 @@ export default function ComposerToolbar({
         onSeedProvider={onSeedProvider}
         loadingModels={loadingModels}
         usage={usage}
+        cwd={cwd}
       />
 
       {isNewSession && (

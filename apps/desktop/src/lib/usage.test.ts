@@ -79,3 +79,28 @@ describe("sessionUsage", () => {
       .toMatchObject({ resetsAt: "2026-09-23T14:00:00Z", usingOverage: true });
   });
 });
+
+describe("a harness that prices the session rather than the model", () => {
+  const usageEvent = (costUsd: number): AgentEvent =>
+    ({
+      payload: {
+        type: "turn_completed",
+        usage: { perModel: [], costUsd },
+      },
+    }) as unknown as AgentEvent;
+
+  /// opencode reports one running total and no per-model split, so a reading
+  /// with nothing in `perModel` still has a figure worth drawing — without
+  /// this the picker drew no block at all for it.
+  it("reads the cost off the turn when no model split arrives", () => {
+    const usage = sessionUsage([usageEvent(0.07)]);
+
+    expect(usage?.costUsd).toBe(0.07);
+    expect(usage?.perModel).toEqual([]);
+  });
+
+  /// Cumulative, so the newest reading is the answer rather than a sum.
+  it("takes the newest reading, never the sum", () => {
+    expect(sessionUsage([usageEvent(0.01), usageEvent(0.09)])?.costUsd).toBe(0.09);
+  });
+});

@@ -1,7 +1,7 @@
 use crate::{
     attachments::Attachment,
     events::ApprovalPolicy,
-    harness::claude_code::commands::SlashCommand,
+    harness::claude_code::{commands::SlashCommand, usage::PlanWindow},
     models::{Effort, Model, ModelId},
     session::{Harness, QueuedMessage, SendOutcome, SessionManager},
     store::{SessionIndexItem, SessionSnapshot, SessionStatus},
@@ -450,8 +450,58 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
         Harness::Grok => harness::grok::commands::list_commands(cwd)
             .await
             .map_err(|e| e.to_string())?,
+        // opencode's is the wire's too, and published on every `session/new`
+        // — its own prompts plus every skill it found. Same bargain grok's
+        // makes: a directory no session has run in answers an error, which the
+        // picker reads as a probe still out rather than as "no commands".
+        Harness::Opencode => harness::opencode::commands::list_commands(cwd)
+            .await
+            .map_err(|e| e.to_string())?,
         Harness::Other(_) => Vec::new(),
     })
+}
+
+/// What this account has spent against its plan, for the picker to draw instead
+/// of tokens.
+///
+/// Claude Code alone answers. It is the only harness here with a plan window to
+/// report, and the only one whose CLI will state it without a model call — so
+/// every other harness answers an empty list and the picker falls back to what
+/// the session itself reported spending.
+///
+/// Empty is an ordinary answer twice over: an unknown harness, and an account
+/// billed per token rather than metered against a plan. A *failure* is dropped
+/// to empty for the same reason the marks cache swallows a failed read — the
+/// figure is a line at the foot of a menu, and a menu that reports its own
+/// plumbing is worse than one that simply does not draw the line.
+/// `cwd` is optional because the new-task composer has one only once a project
+/// is picked, and that is exactly where somebody checks what is left of their
+/// week. With none, the probe runs in `~/.dray` — a directory that always
+/// exists, and one whose throwaway session log lands away from the reader's own
+/// projects.
+#[tauri::command]
+async fn plan_usage(cwd: Option<String>, harness: Harness) -> Vec<PlanWindow> {
+    if harness != Harness::ClaudeCode {
+        return Vec::new();
+    }
+
+    let dir = match cwd.filter(|c| !c.is_empty()) {
+        Some(cwd) => cwd,
+        None => match store::get_home_app_dir().await {
+            Ok(dir) => dir.to_string_lossy().into_owned(),
+            Err(e) => {
+                eprintln!("[plan usage] {e:#}");
+                return Vec::new();
+            }
+        },
+    };
+
+    harness::claude_code::usage::plan_windows(&dir)
+        .await
+        .unwrap_or_else(|e| {
+            eprintln!("[plan usage] {e:#}");
+            Vec::new()
+        })
 }
 
 /// The committed side of the repo view's uncommitted list. Paired with a `None`
@@ -758,6 +808,7 @@ pub fn run() {
             track_feature,
             track_active_day,
             list_slash_commands,
+            plan_usage,
             files::warm_file_index,
             files::search_files,
             files::list_dir,

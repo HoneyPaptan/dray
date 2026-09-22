@@ -19,6 +19,7 @@ pub mod commands;
 pub mod control;
 pub mod mapper;
 pub mod permissions;
+pub mod usage;
 use permissions::PendingPermissions;
 
 /// Appended to the CLI's own system prompt, never replacing it — `--system-prompt`

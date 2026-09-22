@@ -31,13 +31,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { compactTokens, resetTime } from "@/lib/format";
+import { usePlanUsage } from "@/hooks/usePlanUsage";
 import { modelTokens, type PlanLimit, type SessionUsage } from "@/lib/usage";
 import { call } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import { offersFast } from "@/lib/fastMode";
 import { CAN_HOVER } from "@/lib/phoneLayout";
 import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
-import type { Effort, Harness, Model, ModelId } from "@/types/events";
+import type { Effort, Harness, Model, ModelId, PlanWindow } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
   low: "Low",
@@ -199,6 +200,52 @@ function limitLine(limit: PlanLimit, resets: string): string {
   return `Usage limit reached${suffix}`;
 }
 
+/// The CLI's own window name, minus the word every one of them opens with.
+///
+/// `Current week (all models)` is 24 characters in a 208px row against a figure
+/// that must not truncate, and `Current` is the part carrying no information —
+/// every window here is the current one. The rest is left exactly as the CLI
+/// wrote it, including its parenthesised model name, since this app has no
+/// second name for a window it did not invent.
+function windowLabel(label: string): string {
+  const rest = label.replace(/^Current\s+/, "");
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
+}
+
+/// What the plan has left, at the foot of the picker.
+///
+/// Drawn instead of tokens and cost wherever the CLI answers, because a plan is
+/// what actually stops the work: a token count is a number to convert into
+/// worry, where "33% of your week" is the thing the reader would have gone to
+/// the terminal and typed `/usage` for.
+///
+/// A reset is drawn only when it differs from the one above it — the two weekly
+/// windows share theirs, and saying it twice reads as two facts.
+function PlanNote({ windows }: { windows: PlanWindow[] }) {
+  let lastResets: string | null = null;
+
+  return (
+    <div className="mt-1 border-t px-2 pt-1.5 pb-0.5 text-ui text-muted-foreground">
+      <p className="pb-0.5">Plan usage</p>
+
+      {windows.map((w) => {
+        const resets = w.resets && w.resets !== lastResets ? w.resets : null;
+        lastResets = w.resets ?? lastResets;
+
+        return (
+          <div key={w.label}>
+            <p className="flex items-baseline justify-between gap-3">
+              <span className="truncate">{windowLabel(w.label)}</span>
+              <span className="text-foreground shrink-0 tabular-nums">{w.usedPercent}%</span>
+            </p>
+            {resets && <p className="truncate text-muted-foreground/60">resets {resets}</p>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /// What this session has spent, at the foot of the picker.
 ///
 /// Here rather than beside the context ring, which answers a different
@@ -318,10 +365,18 @@ export default function ModelSelector({
   /// harness but Claude Code — and the whole reason the block is conditional
   /// rather than drawn empty.
   usage?: SessionUsage | null;
+  /// Where to ask the CLI what the plan has left. The session's own directory
+  /// where there is one, the picked project before that, and `null` on a new
+  /// task with neither — which the backend answers from `~/.dray` rather than
+  /// declining, since that is exactly when somebody checks what is left.
+  cwd?: string | null;
 }) {
   // Controlled so a click on a submenu trigger can close the whole menu; Radix
   // otherwise keeps the parent open for the submenu it just opened on hover.
   const [open, setOpen] = useState(false);
+  // Read on open, never with the session: the answer costs a CLI process, and
+  // the harnesses that have no plan window answer an empty list without one.
+  const planWindows = usePlanUsage(harness, cwd, open);
   const [libraryOpen, setLibraryOpen] = useState(false);
   // The provider fx is switching *to*, held so the segmented control moves the
   // instant it is clicked: `fx provider` plus a re-read of the list is ~3s on a
@@ -824,7 +879,15 @@ export default function ModelSelector({
           </DropdownMenuItem>
         )}
 
-        {usage && <UsageNote usage={usage} />}
+        {/* One block, not two. The plan is the better answer to the same
+            question and the CLI is the only source for it, so tokens stand in
+            exactly where no window came back — an API-key account, or any
+            harness but Claude Code. */}
+        {planWindows.length > 0 ? (
+          <PlanNote windows={planWindows} />
+        ) : (
+          usage && <UsageNote usage={usage} />
+        )}
       </DropdownMenuContent>
 
       <ModelLibraryDialog

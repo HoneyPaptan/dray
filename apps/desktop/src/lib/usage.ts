@@ -26,7 +26,11 @@ export type SessionUsage = {
   perModel: ModelUsage[];
   /// Every token the session has been charged for, cache included.
   totalTokens: number;
-  /// Summed where the harness prices its own turns, `null` where none does.
+  /// What the session has cost, where the harness prices it.
+  ///
+  /// Two sources and the per-model one wins: Claude Code splits its spend by
+  /// model, where opencode prices the session as a whole and puts one running
+  /// total on the turn. `null` where neither says anything.
   costUsd: number | null;
   limit: PlanLimit | null;
 };
@@ -51,8 +55,13 @@ function tokensOf(m: ModelUsage): number {
 export function sessionUsage(events: AgentEvent[]): SessionUsage | null {
   let perModel: ModelUsage[] | null = null;
   let limit: PlanLimit | null = null;
+  let sessionCost: number | null = null;
 
-  for (let i = events.length - 1; i >= 0 && (perModel === null || limit === null); i--) {
+  for (
+    let i = events.length - 1;
+    i >= 0 && (perModel === null || limit === null || sessionCost === null);
+    i--
+  ) {
     const p = events[i].payload;
 
     if (p.type === "rate_limited") {
@@ -69,6 +78,9 @@ export function sessionUsage(events: AgentEvent[]): SessionUsage | null {
     if (!usage) continue;
 
     if (perModel === null && usage.perModel.length > 0) perModel = usage.perModel;
+    // A running total, so the newest reading is the whole answer — the same
+    // reading `perModel` takes one line up.
+    if (sessionCost === null && usage.costUsd != null) sessionCost = usage.costUsd;
     if (limit === null && usage.rateLimit?.usedPercent != null) {
       limit = {
         status: null,
@@ -79,7 +91,7 @@ export function sessionUsage(events: AgentEvent[]): SessionUsage | null {
     }
   }
 
-  if (perModel === null && limit === null) return null;
+  if (perModel === null && limit === null && sessionCost === null) return null;
 
   const models = perModel ?? [];
   const priced = models.filter((m) => m.costUsd != null);
@@ -87,7 +99,10 @@ export function sessionUsage(events: AgentEvent[]): SessionUsage | null {
   return {
     perModel: [...models].sort((a, b) => tokensOf(b) - tokensOf(a)),
     totalTokens: models.reduce((sum, m) => sum + tokensOf(m), 0),
-    costUsd: priced.length > 0 ? priced.reduce((sum, m) => sum + (m.costUsd ?? 0), 0) : null,
+    costUsd:
+      priced.length > 0
+        ? priced.reduce((sum, m) => sum + (m.costUsd ?? 0), 0)
+        : sessionCost,
     limit,
   };
 }
