@@ -111,6 +111,7 @@ import { focusComposer, focusComposerEnd } from "@/lib/composerFocus";
 import { changeRange, turnChangedTree } from "@/lib/changes";
 import { prBadgeCount, sessionBranch } from "@/lib/pr";
 import { crewAnchor, crewRows, crewSeen } from "@/lib/crew";
+import { sidebarMove } from "@/lib/sidebarAuto";
 import { playCelebration } from "@/lib/sound";
 import {
   activeSpace,
@@ -226,6 +227,21 @@ function App() {
       : null;
 
   const [collapsed, setCollapsed] = useLocalStorage("ade.sidebarCollapsed", false);
+  // The Browser view takes the sidebar with it and gives it back on the way
+  // out. On by default, since a page is the one view whose content is somebody
+  // else's and wants every pixel. Owned here rather than in the settings row
+  // that draws it: `useLocalStorage` is per component, so a second copy there
+  // would write a value this effect never reads.
+  const [autoHideSidebar, setAutoHideSidebar] = useLocalStorage(
+    "ade.autoHideSidebarInBrowser",
+    true,
+  );
+  // Whether the reader has been told the app does that. Written once and never
+  // cleared, the same bargain `splitLearned` makes below.
+  const [autoHideNoticed, setAutoHideNoticed] = useLocalStorage(
+    "ade.autoHideSidebarNoticed",
+    false,
+  );
   // The sidebar's scope, not the composer's: `projectPath` decides where a new
   // session runs, and switching what you're *looking at* must not quietly move
   // where the next prompt would land.
@@ -1038,11 +1054,54 @@ function App() {
   // back beside the page — and the next arrival closes it again.
   const fullBrowserOpen = !issuesOpen && viewTab === "browser";
   const lastViewTab = useRef(viewTab);
+  // Set only where arriving on the browser is what collapsed the sidebar, so
+  // leaving never reopens one the reader had closed themselves. `toggleSidebar`
+  // drops the claim for the same reason: a sidebar they closed by hand while
+  // reading a page is theirs, not ours to give back.
+  const hidForBrowser = useRef(false);
   useEffect(() => {
     const was = lastViewTab.current;
     lastViewTab.current = viewTab;
     if (viewTab === "browser" && was !== "browser") setPanelOpen(false);
-  }, [viewTab, setPanelOpen]);
+
+    // The sidebar's own rule is [sidebarMove](./lib/sidebarAuto.ts), which is
+    // pure and tested: `collapsed` is a dep this effect only *reads*, so the
+    // rule runs again on the frame it collapses the sidebar, and getting that
+    // re-entry wrong handed the sidebar straight back.
+    const move = sidebarMove({
+      from: was,
+      to: viewTab,
+      enabled: autoHideSidebar,
+      collapsed,
+      claimed: hidForBrowser.current,
+    });
+    if (move === "hide") {
+      hidForBrowser.current = true;
+      setCollapsed(true);
+      // Said once ever, and only where the sidebar actually moved: chrome that
+      // rearranges itself with nothing to explain it reads as a bug.
+      if (!autoHideNoticed) {
+        setAutoHideNoticed(true);
+        pushNotice({
+          sessionId: "sidebar",
+          kind: "sidebar-auto",
+          label: "Sidebar hidden",
+          detail: "The browser gets the full width. Turn this off in Settings → Appearance.",
+        });
+      }
+    } else if (move === "restore") {
+      hidForBrowser.current = false;
+      setCollapsed(false);
+    }
+  }, [
+    viewTab,
+    setPanelOpen,
+    collapsed,
+    setCollapsed,
+    autoHideSidebar,
+    autoHideNoticed,
+    setAutoHideNoticed,
+  ]);
   const expandBrowser = () => setViewTab("browser");
   const collapseBrowser = () => {
     setViewTab("chat");
@@ -1675,7 +1734,10 @@ function App() {
     }
   };
 
-  const toggleSidebar = () => setCollapsed((prev) => !prev);
+  const toggleSidebar = () => {
+    hidForBrowser.current = false;
+    setCollapsed((prev) => !prev);
+  };
   useHotkey("sidebar.toggle", toggleSidebar);
   // Takes the sidebar with it: the field lives there, and a chord that opened a
   // search nobody can see would be worse than no chord. `autoFocus` covers the
@@ -2512,6 +2574,8 @@ function App() {
       onRenameSpace={renameSpace}
       onRemoveSpace={removeSpace}
       onMoveSpace={moveSpaceBy}
+      autoHideSidebar={autoHideSidebar}
+      onAutoHideSidebarChange={setAutoHideSidebar}
       integrations={integrations}
       updateStatus={updateStatus}
       updateManual={updateManual}
