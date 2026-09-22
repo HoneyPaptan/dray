@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useFileSearch } from "@/hooks/useFileSearch";
 import { useHotkey } from "@/hooks/useHotkey";
 import { FILE_OPENER } from "@/lib/openWith";
+import { useIsNarrow } from "@/lib/phoneLayout";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import { useResizable } from "@/components/ResizeHandle";
 import {
@@ -78,6 +79,13 @@ export default function FilesView({
 
   const [side, setSide] = useLocalStorage<Side>(SIDE_KEY, DEFAULT_SIDE);
   const [shown, setShown] = useLocalStorage<boolean>(SHOWN_KEY, true);
+
+  // A phone has room for one of the two, so the pair stops being a tree beside a
+  // file and becomes a tree *or* a file: the list takes the view whole, opening
+  // something replaces it with the code, and the same Show button brings it
+  // back. Splitting the width instead is what left the tree a sliver beside a
+  // column of code four characters wide.
+  const narrow = useIsNarrow();
   // The handle sits on the list's *inner* edge, which is the opposite side to
   // the one the list is on.
   const { style, handle } = useResizable({
@@ -106,6 +114,10 @@ export default function FilesView({
 
   const file = open.find((it) => it.path === activePath) ?? null;
 
+  // Narrow, the stored preference cannot hide a list when there is no file to
+  // hide it for — that state draws nothing at all.
+  const listShown = shown || (narrow && !file);
+
   // The tree speaks in paths relative to `cwd`; the store speaks in absolute
   // ones, since a chat link can open a file from outside the tree entirely.
   //
@@ -113,8 +125,13 @@ export default function FilesView({
   // on every session event and a fresh function here would defeat all of it one
   // prop down.
   const openRelative = useCallback(
-    (path: string) => openInFiles(sessionId, `${cwd}/${path}`),
-    [sessionId, cwd],
+    (path: string) => {
+      openInFiles(sessionId, `${cwd}/${path}`);
+      // The file is what the tap asked for, and on a phone the tree is covering
+      // it. Wide, both are on screen and nothing has to move.
+      if (narrow) setShown(false);
+    },
+    [sessionId, cwd, narrow, setShown],
   );
   const selected = activePath?.startsWith(`${cwd}/`)
     ? activePath.slice(cwd.length + 1)
@@ -142,7 +159,10 @@ export default function FilesView({
   // Hidden, the list keeps its own edge and its own filter row — one button
   // wide. The toggle has to stay on screen or there is no way back, and the tab
   // strip beside it is drawn only while a file is open.
-  const list = !shown ? (
+  const list = !listShown ? (
+    // Narrow, there is no strip: the view is the file, and the way back to the
+    // tree rides the tab row beside the file's own name.
+    narrow ? null : (
     <div
       className={cn(
         "flex shrink-0 flex-col",
@@ -153,14 +173,17 @@ export default function FilesView({
         <ShowHide side={side} shown={false} onShown={setShown} />
       </div>
     </div>
+    )
   ) : (
     <div
       data-files-list
       className={cn(
-        "relative flex shrink-0 flex-col",
-        side === "left" ? "border-r border-border" : "border-l border-border",
+        "relative flex flex-col",
+        narrow
+          ? "min-w-0 flex-1"
+          : cn("shrink-0", side === "left" ? "border-r border-border" : "border-l border-border"),
       )}
-      style={style}
+      style={narrow ? undefined : style}
     >
       <Filter
         box={box}
@@ -224,7 +247,9 @@ export default function FilesView({
         filtering={filtering}
       />
 
-      {handle}
+      {/* Dragging a width is meaningless where there is nothing beside it to
+          give the width to. */}
+      {narrow ? null : handle}
     </div>
   );
 
@@ -232,10 +257,17 @@ export default function FilesView({
     // The top border is what parts this from the titlebar, the same rule the
     // Diff view states: without it the tab strip floats directly under the
     // window's own controls and reads as part of them.
-    <div className={cn("flex min-h-0 flex-1 border-t border-border", side === "right" && "flex-row-reverse")}>
+    <div
+      className={cn(
+        "flex min-h-0 flex-1 border-t border-border",
+        !narrow && side === "right" && "flex-row-reverse",
+      )}
+    >
       {list}
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {/* One at a time on a phone: the list is the whole view until a file is
+          opened, and the file is the whole view after that. */}
+      <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", narrow && listShown && "hidden")}>
         {open.length > 0 && (
           <FileTabs
             files={open}
@@ -247,7 +279,12 @@ export default function FilesView({
             // of its own: it acts on the file being read, which the strip
             // beside it already names.
             actions={
-              file && <OpenInButton path={file.path} opener={FILE_OPENER} line={file.line} />
+              <>
+                {/* The only way back to the tree where the list is not on
+                    screen, which is every narrow window. */}
+                {narrow && <ShowHide side={side} shown={false} onShown={setShown} />}
+                {file && <OpenInButton path={file.path} opener={FILE_OPENER} line={file.line} />}
+              </>
             }
           />
         )}

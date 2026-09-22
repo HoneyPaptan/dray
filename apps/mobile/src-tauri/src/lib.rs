@@ -11,6 +11,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // The banner has to be posted by the process the reader is holding. The
+        // desktop's own notifier runs where the runtime is, which on a phone is
+        // somebody's laptop in another room.
+        .plugin(tauri_plugin_notification::init())
         .run(tauri::generate_context!())
         .expect("error while running the Dray phone client");
 }

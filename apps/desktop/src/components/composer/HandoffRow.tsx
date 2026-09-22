@@ -1,6 +1,10 @@
+import { useEffect, useRef, useState } from "react";
+
 import { Button } from "@/components/ui/button";
 import { HANDOFF_ICONS } from "@/components/composer/handoffIcons";
 import { trackFeature } from "@/lib/analytics";
+import { useCanHover } from "@/lib/phoneLayout";
+import { cn } from "@/lib/utils";
 import type { HandoffAction } from "@/lib/handoff";
 
 /// The row of canned prompts, parked behind the composer. Mostly they hand work
@@ -68,6 +72,31 @@ export default function HandoffRow({
   /// absence would move the composer.
   disabled?: boolean;
 }) {
+  // With no pointer there is no hover, and the zone is not focusable either —
+  // so on a touch screen the row could not be opened at all. There the sliver is
+  // a button: one tap opens it, one closes it, and sending closes it too. The
+  // row is not simply left open, which would park three buttons over the
+  // transcript's last line for the life of the session.
+  const canHover = useCanHover();
+  const [tapped, setTapped] = useState(false);
+  const open = !canHover && tapped;
+
+  // A press anywhere else puts it back, which is the gesture a cursor leaving
+  // the zone stands for on a desktop. `pointerdown` rather than `click`, so the
+  // row is on its way down before whatever was actually aimed at fires — and on
+  // the zone itself it never runs, since the zone's own handler is the toggle.
+  const zone = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+
+    const close = (e: PointerEvent) => {
+      if (!zone.current?.contains(e.target as Node)) setTapped(false);
+    };
+
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [open]);
+
   // Near-dead now Run server is unconditional — only the new-task composer,
   // with no session to send into, reaches it. Kept because the reserve has to
   // go with the row: a sliver standing over nothing would open onto nothing.
@@ -88,7 +117,11 @@ export default function HandoffRow({
           invisible full-width strip would swallow clicks and text selection.
           `justify-end` is what pins the window below to the card's top edge, so
           the height it gains is gained upward. */}
-      <div className="group absolute -top-7 left-3 flex h-8 w-fit flex-col justify-end">
+      <div
+        ref={zone}
+        className="group absolute -top-7 left-3 flex h-8 w-fit flex-col justify-end"
+        onClick={canHover ? undefined : () => setTapped((was) => !was)}
+      >
         <div
           className={
             "overflow-hidden " +
@@ -101,7 +134,8 @@ export default function HandoffRow({
             // buttons' own 28 plus the reserve, so the open row clears the
             // card's top edge and reads as sitting above the composer rather
             // than resting on it. This is the component's one dial.
-            "h-1 group-hover:h-8 group-focus-within:h-8"
+            "h-1 group-hover:h-8 group-focus-within:h-8 " +
+            (open ? "h-8" : "")
           }
         >
           <div className="flex gap-1">
@@ -132,8 +166,12 @@ export default function HandoffRow({
                 onClick={() => {
                   trackFeature(`handoff_${action.id}`);
                   onSend(action.prompt);
+                  setTapped(false);
                 }}
-                className="pointer-events-none group-focus-within:pointer-events-auto group-hover:pointer-events-auto"
+                className={cn(
+                  "pointer-events-none group-focus-within:pointer-events-auto group-hover:pointer-events-auto",
+                  open && "pointer-events-auto",
+                )}
               >
                 <Icon className="size-3.5" strokeWidth={1.5} />
                 {action.label}

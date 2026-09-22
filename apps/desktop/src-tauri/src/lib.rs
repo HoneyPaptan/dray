@@ -161,6 +161,18 @@ async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
     attachments::read_attachments(paths).await
 }
 
+/// Takes a file uploaded from a remote client and pins it like a picked one.
+///
+/// A phone picks files on the phone, and every command runs on the machine with
+/// the runtime, so the path it picked names nothing there. The bytes travel
+/// instead, once, and land in `~/.dray/uploads`.
+#[tauri::command]
+async fn upload_attachment(name: String, data: String) -> Result<Attachment, String> {
+    attachments::upload_attachment(name, data)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Which agents can actually be run on this machine, and what to say about
 /// one that can't.
 ///
@@ -725,6 +737,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             send_msg,
             read_attachments,
+            upload_attachment,
             list_models,
             refresh_models,
             set_fx_provider,

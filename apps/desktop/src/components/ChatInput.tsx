@@ -745,6 +745,10 @@ export default function ChatInput({
   return (
     <div className="px-4 pb-4">
       <form
+        // The phone stylesheet is what reads this: the empty state is nothing
+        // but this box, so there it is given several lines of height rather than
+        // one, which is both easier to write in and easier to hit.
+        data-new-task={isNewTask ? "" : undefined}
         className="mx-auto max-w-3xl"
         onSubmit={(e) => {
           e.preventDefault();

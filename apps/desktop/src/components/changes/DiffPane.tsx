@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Columns2, Rows3 } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
@@ -56,6 +56,7 @@ export default function DiffPane({
   head,
   file,
   empty,
+  leading,
 }: {
   cwd: string;
   base: string;
@@ -65,6 +66,10 @@ export default function DiffPane({
   /// What to say in that state. The two sub-tabs need different sentences: one
   /// wants a file picked, the other wants a commit opened first.
   empty: string;
+  /// Drawn at the head of the file row. The way back to the list where the pane
+  /// has taken the whole view, which is every narrow window — the file's own
+  /// name is the row a reader looks along for it.
+  leading?: ReactNode;
 }) {
   // Split by default, which is also the library's own default and what anyone
   // arriving from another git client expects. Stored, because it is a way of
@@ -83,8 +88,15 @@ export default function DiffPane({
 
   if (!file) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-ui text-muted-foreground">
-        {empty}
+      <div className="flex min-h-0 flex-1 flex-col">
+        {leading && (
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-ui">
+            {leading}
+          </div>
+        )}
+        <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-ui text-muted-foreground">
+          {empty}
+        </div>
       </div>
     );
   }
@@ -94,6 +106,7 @@ export default function DiffPane({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border px-3 text-ui">
+        {leading}
         <FileIcon path={file.path} />
         {/* Name first, directory truncating after it — same reason as the list:
             the filename is what has to survive a narrow pane. */}

@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { channel } from "@/lib/channel";
+import { IS_REMOTE } from "@/lib/transport";
 
 /// Whether the app window is frontmost. Read imperatively rather than as React
 /// state: the one caller that matters is inside a Tauri event listener
@@ -11,7 +12,17 @@ import { channel } from "@/lib/channel";
 /// into devtools — none of which means the user has left the app, and each
 /// would fire a desktop notification at someone looking straight at the window.
 /// The DOM pair is the fallback for `pnpm dev`, where there is no Tauri window.
-let focused = document.hasFocus();
+/// On a phone the question is not which window is frontmost but whether the app
+/// is on screen at all, and the two have different answers there: Tauri's window
+/// focus event does not fire when an Android activity goes to the background, so
+/// the app believed it was frontmost for the whole of its life and every
+/// notification was withheld as "they are looking right at it". `visibilitychange`
+/// is the signal the platform actually sends, and the webview keeps running JS
+/// behind it — `WebView.onPause` stops drawing and timers, not scripts — so the
+/// socket is still live to notice the turn ending.
+const PAGE_VISIBILITY = IS_REMOTE;
+
+let focused = PAGE_VISIBILITY ? document.visibilityState === "visible" : document.hasFocus();
 
 const changed = channel<boolean>();
 
@@ -21,14 +32,20 @@ function set(next: boolean) {
   changed.emit(next);
 }
 
-try {
-  void getCurrentWindow()
-    .onFocusChanged(({ payload }) => set(payload))
-    .catch(useDomEvents);
-} catch {
-  // `getCurrentWindow` reads a global the plain browser doesn't have, so this
-  // throws rather than rejecting under `pnpm dev`.
-  useDomEvents();
+if (PAGE_VISIBILITY) {
+  document.addEventListener("visibilitychange", () =>
+    set(document.visibilityState === "visible"),
+  );
+} else {
+  try {
+    void getCurrentWindow()
+      .onFocusChanged(({ payload }) => set(payload))
+      .catch(useDomEvents);
+  } catch {
+    // `getCurrentWindow` reads a global the plain browser doesn't have, so this
+    // throws rather than rejecting under `pnpm dev`.
+    useDomEvents();
+  }
 }
 
 function useDomEvents() {

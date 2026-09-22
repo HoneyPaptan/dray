@@ -1,10 +1,41 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { ChevronLeft, PanelLeft } from "lucide-react";
 
+import { hasOpenOverlay, useBackLayer } from "@/lib/backStack";
 import { DROP_ATTR } from "@/lib/dragSession";
 import { EMPTY_VIEW } from "@/lib/groups";
 import { setPhoneDrawer, useIsNarrow, usePhoneDrawer } from "@/lib/phoneLayout";
 import { cn } from "@/lib/utils";
+
+/// How far a touch must travel sideways before it is a swipe rather than a tap
+/// that moved. Deliberately short: the gesture is how both side panes are
+/// reached on a phone, and the screen edges are the system's — Android's own
+/// back gesture eats them — so this has to answer a swipe made anywhere,
+/// including one made in a hurry across the middle of the transcript.
+const SWIPE = 40;
+
+/// How much more sideways than vertical it has to be. A drag while reading is a
+/// scroll, and this is what keeps one from opening a pane; low enough that a
+/// swipe made with the thumb, which arcs, still counts.
+const SIDEWAYS = 1.2;
+
+/// Whether the touch began somewhere that scrolls sideways for itself — a code
+/// block, a diff, the phone's own tab strip. Those keep their scrolling: a
+/// gesture that stole it would make the content unreadable, and they are the
+/// one place a horizontal drag already means something.
+function scrollsSideways(target: EventTarget | null): boolean {
+  let el = target instanceof Element ? target : null;
+
+  while (el && el !== document.body) {
+    if (el.scrollWidth - el.clientWidth > 8) {
+      const overflow = getComputedStyle(el).overflowX;
+      if (overflow === "auto" || overflow === "scroll") return true;
+    }
+    el = el.parentElement;
+  }
+
+  return false;
+}
 
 type AppShellProps = {
   sidebar: ReactNode;
@@ -16,6 +47,9 @@ type AppShellProps = {
   /// Put the inspector away. Narrow only, where it takes the whole window and
   /// the reader would otherwise have no way back to the conversation.
   onPanelClose?: () => void;
+  /// Bring it out. Narrow only, and only the swipe uses it — the tab row is
+  /// how it is opened by hand.
+  onPanelOpen?: () => void;
   /// Drawn under the header on a narrow window and nowhere else. The tab row
   /// lives here rather than in the header, which cannot hold a session's name
   /// and four labels at a phone's width.
@@ -52,6 +86,7 @@ export default function AppShell({
   panel,
   panelOpen = false,
   onPanelClose,
+  onPanelOpen,
   subheader,
   crew,
   centered = false,
@@ -60,6 +95,74 @@ export default function AppShell({
 }: AppShellProps) {
   const narrow = useIsNarrow();
   const drawer = usePhoneDrawer();
+
+  // What Android's Back takes away here, innermost first. Registered in this
+  // order so the inspector — which covers the whole window, drawer included —
+  // is the one a press closes while both are open.
+  useBackLayer(narrow && drawer, () => setPhoneDrawer(false));
+  useBackLayer(narrow && panelOpen, () => onPanelClose?.());
+
+  // Both side panes are reached by swiping, which on a phone is the only
+  // gesture there is room for. **Anywhere on the screen, not from an edge**:
+  // Android's own back gesture owns both edges, so an edge-started swipe is one
+  // the app never sees — and a reader holding the phone one-handed swipes
+  // across the middle of the transcript, which is where the thumb is.
+  //
+  // Right brings the sessions out, left brings the inspector out, and a swipe
+  // back over an open pane closes it. **Acted on at the release, never during
+  // the drag**, so the listeners stay passive and nothing here fights the
+  // page's own scrolling.
+  useEffect(() => {
+    if (!narrow) return;
+
+    let startX = 0;
+    let startY = 0;
+    let tracking = false;
+
+    const start = (e: TouchEvent) => {
+      tracking = e.touches.length === 1 && !scrollsSideways(e.target) && !hasOpenOverlay();
+      if (!tracking) return;
+
+      const touch = e.touches[0];
+      startX = touch.clientX;
+      startY = touch.clientY;
+    };
+
+    const cancel = () => {
+      tracking = false;
+    };
+
+    const end = (e: TouchEvent) => {
+      if (!tracking) return;
+      tracking = false;
+
+      const touch = e.changedTouches[0];
+      if (!touch) return;
+
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+      if (Math.abs(dx) < SWIPE || Math.abs(dx) < Math.abs(dy) * SIDEWAYS) return;
+
+      if (dx > 0) {
+        if (drawer) return;
+        if (panelOpen) return onPanelClose?.();
+        return setPhoneDrawer(true);
+      }
+
+      if (drawer) return setPhoneDrawer(false);
+      if (panelOpen) return;
+      onPanelOpen?.();
+    };
+
+    document.addEventListener("touchstart", start, { passive: true });
+    document.addEventListener("touchend", end, { passive: true });
+    document.addEventListener("touchcancel", cancel, { passive: true });
+    return () => {
+      document.removeEventListener("touchstart", start);
+      document.removeEventListener("touchend", end);
+      document.removeEventListener("touchcancel", cancel);
+    };
+  }, [narrow, drawer, panelOpen, onPanelClose, onPanelOpen]);
 
   return (
     <div className="flex h-full w-full overflow-hidden">
@@ -77,6 +180,7 @@ export default function AppShell({
             />
           )}
           <div
+            data-phone-drawer=""
             className={cn(
               // Drawn over the chat, so it needs a fill of its own. In the flow it
               // deliberately has none and reads straight through to the body's
@@ -133,7 +237,7 @@ export default function AppShell({
           >
             {/* `children` is deliberately dropped: there is no transcript to
                 show, and the composer is the whole state. */}
-            <div className="w-full shrink-0 pt-[13vh]">{footer}</div>
+            <div className={cn("w-full shrink-0", narrow ? "pt-6" : "pt-[13vh]")}>{footer}</div>
             {overlay}
           </div>
         ) : (

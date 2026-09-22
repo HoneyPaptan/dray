@@ -120,8 +120,15 @@ function CommandRow({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <div className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-border pr-0.5 pl-2 dark:border-input">
-        <code className="font-mono text-code text-foreground">{command}</code>
+      {/* `max-w-full` and a code that scrolls inside it, never `shrink-0`: the
+          command carries the session's own directory, so on a phone it is wider
+          than the screen — and a chip that cannot shrink took the whole tab off
+          the right edge with it. The copy button stays put at the chip's end
+          whatever the text does. */}
+      <div className="flex h-6 max-w-full items-center gap-1 rounded-md border border-border pr-0.5 pl-2 dark:border-input">
+        <code className="min-w-0 overflow-x-auto font-mono text-code whitespace-nowrap text-foreground">
+          {command}
+        </code>
         <button
           type="button"
           aria-label={`Copy ${command}`}

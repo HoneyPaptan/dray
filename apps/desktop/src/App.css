@@ -1255,7 +1255,13 @@
     html,
     body,
     #root {
-      height: 100dvh;
+      /* `--viewport-h` is `visualViewport.height`, written by `watchViewport`,
+         and it is the only one of the three that knows about the soft keyboard:
+         `dvh` tracks the browser's retracting chrome alone. Without it the app
+         stayed full height under the keyboard and the webview panned the whole
+         page up to keep the caret in sight, which took the header off screen.
+         `dvh` is the fallback for the frame before the first measurement. */
+      height: var(--viewport-h, 100dvh);
     }
 
     /* Android draws the webview edge to edge, so without this the first row of
@@ -1312,6 +1318,139 @@
     [data-phone-drawer] button,
     [data-phone-drawer] [role="button"] {
       min-height: 2.75rem;
+    }
+
+    /* A dialog is capped at a width chosen for a laptop window, which at a
+       phone's width is wider than the screen — so the box ran off both edges
+       and the half of it carrying the buttons was unreachable. Held to the
+       window instead, and allowed to scroll: a confirm still reads as a card
+       over the app rather than taking the screen, which is what the one dialog
+       that really is a screen asks for itself. */
+    /* `!important` throughout, and it is not belt and braces: every one of these
+       fights a Tailwind utility of the same specificity on the element itself,
+       and utilities are a *later layer* than this one — so without it the rule
+       parses, matches, and loses. Same reading the drawer's own width takes. */
+    [data-slot="dialog-content"] {
+      max-width: calc(100vw - 1.5rem) !important;
+      max-height: calc(var(--viewport-h, 100dvh) - 2rem) !important;
+      overflow-y: auto;
+    }
+
+    /* Settings is the exception, and it is one because of what is in it: seven
+       groups down a rail beside a panel of prose. Held to a card there is no
+       width left for either, so here it is the screen. */
+    [data-phone-sheet] {
+      top: 0 !important;
+      left: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      height: var(--viewport-h, 100dvh) !important;
+      max-height: none !important;
+      /* `translate: none` is **dropped by the minifier** — verified in the built
+         stylesheet — which left the dialog full-bleed and still shifted up and
+         left by half itself, since the centring utility's `-50%` survived.
+         Zeroing the utility's own custom properties is what cannot be optimised
+         away, and the longhand beside it is belt for the same braces. */
+      --tw-translate-x: 0 !important;
+      --tw-translate-y: 0 !important;
+      translate: 0 0 !important;
+      transform: none !important;
+      border: 0;
+      border-radius: 0;
+      /* The rail and the panel are side by side; a long path in one of them
+         must wrap rather than push the sheet wider than the screen, which is
+         what left the whole dialog scrolling sideways. */
+      overflow-x: hidden;
+      overflow-wrap: anywhere;
+      padding-top: calc(1.25rem + env(safe-area-inset-top)) !important;
+      padding-bottom: calc(0.75rem + env(safe-area-inset-bottom)) !important;
+    }
+
+    /* The close cross is absolute against the padding box's *origin*, which is
+       above the inset the sheet just added — so left alone it sits under the
+       status bar, where the system takes the touch first. */
+    [data-phone-sheet] [data-slot="dialog-close"] {
+      top: calc(1.25rem + env(safe-area-inset-top)) !important;
+    }
+
+    /* The new task screen is the one place the app is nothing but its input, so
+       the box gets the room a phone can spare. Four lines rather than one, and
+       the tap target with it. */
+    [data-new-task] [contenteditable] {
+      min-height: 4lh;
+    }
+
+    /* The row under the composer is a cursor's worth of height per control.
+       Height alone rather than padding, so the icons stay on their own
+       centres — the same bargain the drawer's rows make. */
+    [data-composer-toolbar] > * {
+      min-height: 2.25rem;
+      /* The height alone leaves anything that is not already a flex box sitting
+         at the top of the taller row — which is what put the context ring a few
+         pixels above the words beside it. */
+      display: flex;
+      align-items: center;
+    }
+
+    /* Menus are portalled to the body, so the drawer's own row height cannot
+       reach them, and every one of them — the model picker, a row's context
+       menu, the effort levels under a model — is a list of 28px rows aimed at
+       with a finger. */
+    [data-slot="dropdown-menu-item"],
+    [data-slot="dropdown-menu-sub-trigger"],
+    [data-slot="dropdown-menu-checkbox-item"],
+    [data-slot="dropdown-menu-radio-item"],
+    [data-slot="context-menu-item"],
+    [data-slot="context-menu-sub-trigger"],
+    [data-slot="context-menu-checkbox-item"],
+    [data-slot="context-menu-radio-item"] {
+      min-height: 2.25rem;
+    }
+  }
+
+  /* Every control the desktop reveals on hover — a row's close cross, a copy
+     button, a table's expander — is unreachable without a pointer, and a touch
+     browser's emulated hover arrives on the press meant for the control itself.
+     So on a touch screen they are simply always drawn. One rule rather than a
+     branch at each of the fourteen sites: the pattern is `opacity-0` plus
+     `group-hover:opacity-100` everywhere it appears, so forcing the second
+     class is the whole of it. */
+  @media (hover: none) {
+    .group-hover\:opacity-100,
+    .group-hover\/edit\:opacity-100,
+    .group-hover\/file\:opacity-100,
+    .group-hover\/group\:opacity-100,
+    .group-hover\/heading\:opacity-100,
+    .group-hover\/tab\:opacity-100,
+    .group-hover\/table\:opacity-100,
+    .group-hover\/think\:opacity-100,
+    .group-hover\/tool\:opacity-100,
+    .group-hover\/turn\:opacity-100 {
+      opacity: 1 !important;
+    }
+
+    /* Drawing a control is not the same as making it answer: every one of these
+       pairs `pointer-events-none` with a `group-hover` that turns it back on, so
+       without this they are visible and dead. */
+    .group-hover\:pointer-events-auto {
+      pointer-events: auto !important;
+    }
+
+    /* A sidebar row stacks its timestamp and its two row actions in one slot
+       and crossfades between them, which only works while one of the pair is
+       invisible. With both drawn they sit on top of each other, so the slot
+       becomes an ordinary row here rather than hiding a working session's orb to
+       keep Pin and Settle reachable — those two are on no other surface, the
+       row's own menu carrying Fork, Detach and Delete and neither of them.
+       `order` puts the time back at the row's outer edge, where it is on every
+       other row and on the desktop. */
+    [data-row-meta] {
+      gap: 0.25rem;
+    }
+
+    [data-row-meta] > span {
+      position: static !important;
+      order: 2;
     }
   }
 

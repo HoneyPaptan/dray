@@ -48,6 +48,8 @@ import ShortcutsSettings from "@/components/settings/ShortcutsSettings";
 import SpacesSettings from "@/components/settings/SpacesSettings";
 import TranscriptionSettings from "@/components/settings/TranscriptionSettings";
 import { useTranscriptionSettings } from "@/hooks/useTranscription";
+import { notifyTest } from "@/lib/notify";
+import { useIsNarrow } from "@/lib/phoneLayout";
 import { IS_MAC } from "@/lib/platform";
 import { hasLightMode, THEMES, type ThemeMode } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -157,7 +159,15 @@ export default function SettingsDialog({
 
           `gap-0` because the title moved into the rail: the dialog holds one
           child now, and the grid's own gap would be a band under nothing. */}
-      <DialogContent aria-describedby={undefined} className="max-w-176 gap-0">
+      {/* `data-phone-sheet` is what makes this one dialog the whole screen on a
+          phone. Seven groups down a rail beside a panel of prose has nowhere to
+          go in a card at that width, where every other dialog in the app is a
+          question and two buttons and still reads as one. */}
+      <DialogContent
+        data-phone-sheet=""
+        aria-describedby={undefined}
+        className="max-w-176 gap-0"
+      >
         <SettingsTabs initialTab={initialTab}>
           {{
             appearance: (
@@ -169,6 +179,7 @@ export default function SettingsDialog({
                     checked={autoHideSidebar}
                     onChange={onAutoHideSidebarChange}
                   />
+                  <NotificationTestRow />
                 </Section>
                 <Section title="Font size">
                   <FontSizeRows />
@@ -1058,8 +1069,14 @@ function SettingsTabs({
     setTab(SETTINGS_TABS[next]),
   );
 
+  // The rail is a column beside the panel, which needs a panel to sit beside. At
+  // a phone's width there is none to spare, so the list lies down: the same
+  // buttons in the same order, scrolled sideways, with the panel taking the rest
+  // of the screen under it. Nothing in the groups themselves changes.
+  const narrow = useIsNarrow();
+
   return (
-    <div className="flex gap-5">
+    <div className={cn("flex", narrow ? "h-full min-h-0 flex-col gap-3" : "gap-5")}>
       {/* A rail down the side, which reverses this dialog's first shape and the
           reason is that the dialog moved. Tabs across the top were right at
           28rem, where a rail would have taken a third of the width from prose
@@ -1073,14 +1090,20 @@ function SettingsTabs({
           below all of it. Over the rail it names the list it sits on and the
           panel starts at the top of the dialog. `px-2` is the tab buttons' own
           padding, so the word lines up with the labels under it. */}
-      <div className="flex w-32 shrink-0 flex-col gap-3">
+      <div className={cn("flex shrink-0 flex-col gap-3", narrow ? "min-w-0" : "w-32")}>
         <DialogTitle className="px-2">Settings</DialogTitle>
         <div
           role="tablist"
           aria-label="Settings"
-          aria-orientation="vertical"
+          aria-orientation={narrow ? "horizontal" : "vertical"}
           onKeyDown={onKeyDown}
-          className="flex flex-col gap-0.5"
+          className={cn(
+            "flex gap-0.5",
+            // Scrolled rather than wrapped: seven labels on two lines read as
+            // two rows of tabs, which is the very thing that moved them to a
+            // rail on the desktop.
+            narrow ? "-mx-1 overflow-x-auto px-1 [&>*]:shrink-0" : "flex-col",
+          )}
         >
           {SETTINGS_TABS.map((value, i) => (
             <TabButton
@@ -1114,7 +1137,7 @@ function SettingsTabs({
           The negative margin is for the model rows' focus ring: `overflow-y`
           clips the other axis too, so a ring drawn at the panel's own edge
           loses its outer edge without it. */}
-      <div className="relative min-w-0 flex-1">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         {/* A tab's own header action, drawn over the panel's top-right and
             outside its scroll box — a control that scrolls away is one the
             reader has to go looking for, and one drawn *in* the panel spends a
@@ -1170,7 +1193,13 @@ function SettingsTabs({
           // the app does. Static, so the warning on that utility — a
           // hover-driven pseudo rule resolving late and never clearing — is not
           // in play here.
-          className="-mx-1 flex h-[32rem] max-h-[60vh] flex-col gap-7 overflow-y-auto px-1 [&::-webkit-scrollbar-track]:my-4 [&>*]:shrink-0"
+          className={cn(
+            "-mx-1 flex flex-col gap-7 overflow-y-auto px-1 [&::-webkit-scrollbar-track]:my-4 [&>*]:shrink-0",
+            // A fixed height is what stops the dialog jumping between tabs. The
+            // phone sheet is already the window's height, so there is nothing to
+            // hold still and the panel simply takes what is left under the tabs.
+            narrow ? "min-h-0 flex-1" : "h-[32rem] max-h-[60vh]",
+          )}
         >
           <SettingsHeaderSlot.Provider value={slot}>{children[tab]}</SettingsHeaderSlot.Provider>
         </div>
@@ -1203,6 +1232,44 @@ function SettingsTabs({
 /// `asGroup` is for a control that is several elements rather than one input:
 /// `htmlFor` only reaches a labelable element, so a radio group has to be pointed the
 /// other way and name the label by id instead.
+/// Posts one banner, so the reader can see whether this channel works at all.
+///
+/// It is the one part of the app that says nothing when it is broken: a banner
+/// that never arrives looks exactly like a turn that never finished. On a phone
+/// there is no notification centre to check it against either, and the first
+/// press is also what raises Android's own permission prompt.
+function NotificationTestRow() {
+  const [state, setState] = useState<"idle" | "sent" | "failed">("idle");
+
+  return (
+    <SettingRow
+      id="notification-test"
+      label="Notifications"
+      description={
+        state === "failed"
+          ? "That did not go out. The system may have them turned off for Dray."
+          : state === "sent"
+            ? "Sent. It should be on this device now."
+            : "Send one to this device to check it arrives."
+      }
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          setState("idle");
+          notifyTest().then(
+            () => setState("sent"),
+            () => setState("failed"),
+          );
+        }}
+      >
+        Send test
+      </Button>
+    </SettingRow>
+  );
+}
+
 function SettingRow({
   id,
   label,

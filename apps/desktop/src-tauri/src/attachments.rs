@@ -139,6 +139,40 @@ pub async fn read_attachments(paths: Vec<String>) -> Vec<Attachment> {
     out
 }
 
+/// Takes a file whose bytes arrived over the wire and puts it on disk, then
+/// describes it exactly as a picked path is described.
+///
+/// The phone is why this exists. Every command a remote client makes runs on
+/// the machine holding the runtime, so a path picked on the phone names a file
+/// that machine has never heard of — `read_attachments` answered an empty list
+/// and attaching anything from a phone silently did nothing. Bytes are the only
+/// thing that can cross, so they cross once and land in a real file here; from
+/// there the send path, the `@path` mention and the archive all work unchanged.
+///
+/// The name is the reader's, so it is reduced to its own last component before
+/// it is joined to anything — a name carrying `..` or a leading slash would
+/// otherwise choose the directory. A uuid in front of it keeps two files of the
+/// same name apart.
+pub async fn upload_attachment(name: String, data: String) -> Result<Attachment> {
+    let bytes = STANDARD
+        .decode(data.as_bytes())
+        .context("upload was not base64")?;
+
+    let safe = Path::new(&name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "upload".to_string());
+
+    let dir = get_home_app_dir().await?.join("uploads");
+    fs::create_dir_all(&dir).await?;
+
+    let path = dir.join(format!("{}-{safe}", Uuid::now_v7()));
+    fs::write(&path, &bytes).await.context("could not write upload")?;
+
+    describe(&path.to_string_lossy()).await
+}
+
 /// `~/.dray/attachments/<session-id>`.
 async fn attachments_path(session_id: &str) -> Result<PathBuf> {
     Ok(get_home_app_dir()

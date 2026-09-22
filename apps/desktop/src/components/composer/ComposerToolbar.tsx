@@ -122,7 +122,9 @@ export default function ComposerToolbar({
   busy,
 }: ComposerToolbarProps) {
   return (
-    <div className="flex min-w-0 items-center gap-0.5 px-1">
+    // `data-composer-toolbar` is the phone stylesheet's handle on this row:
+    // every control in it is sized for a cursor, and a finger needs the height.
+    <div data-composer-toolbar className="flex min-w-0 items-center gap-0.5 px-1">
       {/* No radius override: `icon-sm` already carries the app's rounded-square,
           and a circle here would be the one round control in a row of them. */}
       <Tooltip>

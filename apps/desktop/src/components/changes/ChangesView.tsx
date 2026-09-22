@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronLeft } from "lucide-react";
 
 import CommitMessage from "@/components/changes/CommitMessage";
 import DiffPane from "@/components/changes/DiffPane";
@@ -10,6 +11,7 @@ import { useChanges } from "@/hooks/useChanges";
 import { useHotkey } from "@/hooks/useHotkey";
 import { useCommitLog, useHeadTree } from "@/hooks/useRepo";
 import { commitBase, defaultSubTab, type SubTab } from "@/lib/commit";
+import { useIsNarrow } from "@/lib/phoneLayout";
 import { cn } from "@/lib/utils";
 import type { ChangedFile, Commit } from "@/types/events";
 
@@ -67,6 +69,17 @@ export default function ChangesView({
   // happening.
   const [commitPath, setCommitPath] = useState<string | null>(null);
   const [branchPath, setBranchPath] = useState<string | null>(null);
+
+  // A phone has room for the list or the diff, not both. Side by side the list
+  // took seven tenths of the screen and the code wrapped every few words, so
+  // here picking a file replaces the list with the diff and the file row's own
+  // Back takes the reader to it.
+  const narrow = useIsNarrow();
+  const [listShown, setListShown] = useState(true);
+  const openFile = (pick: (path: string) => void) => (path: string) => {
+    pick(path);
+    if (narrow) setListShown(false);
+  };
 
   const head = useHeadTree(cwd, revision, active);
 
@@ -195,7 +208,12 @@ export default function ChangesView({
     // sub-tab row and the pane's file header float directly under the window's
     // own controls and read as part of them.
     <div className="flex min-h-0 flex-1 border-t border-border">
-      <div className="flex w-72 shrink-0 flex-col border-r border-border">
+      <div
+        className={cn(
+          "flex flex-col border-r border-border",
+          narrow ? cn("min-w-0 flex-1", !listShown && "hidden") : "w-72 shrink-0",
+        )}
+      >
         {/* `px-1` against the right panel's `px-2`, because the tabs here have
             a list under them rather than a panel body: the button's own `px-2`
             lands its label at 12px, level with the filenames below it. */}
@@ -243,7 +261,7 @@ export default function ChangesView({
             <FileList
               files={workingFiles}
               selected={selectedWorking?.path ?? null}
-              onSelect={setWorkingPath}
+              onSelect={openFile(setWorkingPath)}
               className="min-h-0 flex-1 overflow-y-auto"
             />
           )
@@ -260,7 +278,7 @@ export default function ChangesView({
             }}
             files={commitFiles}
             selectedFile={selectedCommitFile?.path ?? null}
-            onSelectFile={setBranchPath}
+            onSelectFile={openFile(setBranchPath)}
             hasMore={branchLog.hasMore}
             onLoadMore={branchLog.loadMore}
             loading={branchLog.loading}
@@ -279,7 +297,7 @@ export default function ChangesView({
             }}
             files={commitFiles}
             selectedFile={selectedCommitFile?.path ?? null}
-            onSelectFile={setCommitPath}
+            onSelectFile={openFile(setCommitPath)}
             hasMore={log.hasMore}
             onLoadMore={log.loadMore}
             loading={log.loading}
@@ -288,7 +306,12 @@ export default function ChangesView({
         )}
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1 flex-col",
+          narrow && listShown && "hidden",
+        )}
+      >
         {/* Keyed on the sha so opening another commit arrives collapsed: the
             expanded state belongs to the message being read, not to the pane.
             The message belongs to whichever commit is open, whichever of the
@@ -306,6 +329,18 @@ export default function ChangesView({
               : subTab === "branch" && !branchCommit
                 ? "This branch has no commits of its own yet."
                 : "Select a file to see what changed."
+          }
+          leading={
+            narrow ? (
+              <button
+                type="button"
+                onClick={() => setListShown(true)}
+                className="-ml-1 flex shrink-0 items-center gap-0.5 rounded-md px-1 py-1 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ChevronLeft className="size-4" />
+                Files
+              </button>
+            ) : undefined
           }
         />
       </div>

@@ -2132,7 +2132,12 @@ function App() {
           // lit row would name a session that is nowhere on screen — and the
           // selection itself is kept, which is what makes coming back free.
           selectedSessionId={issuesOpen ? null : selectedSessionId}
-          collapsed={collapsed}
+          // Narrow, the drawer *is* the collapse: the sidebar is drawn over the
+          // chat and the one button in the app header opens and shuts it. Left
+          // honoured there, the stored preference emptied the drawer and put a
+          // second toggle in the header beside the first — two controls a
+          // press apart, one opening a drawer with nothing in it.
+          collapsed={collapsed && !narrow}
           onToggleCollapsed={toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
           // The sidebar is the reader leaving the crew, and it has to say so
@@ -2191,7 +2196,7 @@ function App() {
           {/* Only when collapsed — expanded, the sidebar owns the toggle. This
               header reaches the window edge in that state, so it has to clear
               the traffic lights, which fullscreen removes. */}
-          {collapsed && (
+          {collapsed && !narrow && (
             <div
               className={cn(
                 "flex items-center",
@@ -2242,6 +2247,9 @@ function App() {
       }
       panelOpen={panelShown}
       onPanelClose={issuesOpen ? () => setPickedIssue(null) : handleTogglePanel}
+      // The same toggle: it opens what it would close, and the shell only ever
+      // calls this one while the pane is shut.
+      onPanelOpen={handleTogglePanel}
       // The header cannot hold a session's name and four tab labels at a
       // phone's width, so on a narrow window the row moves under it. `AppShell`
       // draws this only while narrow, which is the same question the header

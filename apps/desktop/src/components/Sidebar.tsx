@@ -2272,7 +2272,10 @@ function SessionRow({
             the absolutely-drawn date shrink-to-fit inside 20-odd pixels, where
             "Aug 18" wraps onto two lines. In `em` so it follows the interface
             font size the reader picks, and wide enough for a month-and-day. */}
-        <div className="relative flex min-w-[4em] shrink-0 items-center justify-end self-stretch pl-2 text-ui">
+        <div
+          data-row-meta
+          className="relative flex min-w-[4em] shrink-0 items-center justify-end self-stretch pl-2 text-ui"
+        >
           {/* `pointer-events-none` unconditionally: it's never a target, and a
               faded-but-present element still hit-tests — stacked on `right-0` it
               would otherwise swallow the cursor over the last button, which reads

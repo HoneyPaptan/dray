@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/tooltip";
 import { call } from "@/lib/transport";
 import { offersFast } from "@/lib/fastMode";
+import { CAN_HOVER } from "@/lib/phoneLayout";
 import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
 
@@ -371,12 +372,30 @@ export default function ModelSelector({
   const rowEffort = (model: Model): Effort | null =>
     model.id === modelId ? effort : model.defaultEffort;
 
+  // Which row's effort submenu is open, on a touch screen alone. Radix opens a
+  // sub-trigger on click and has no closing gesture for one — there is no
+  // pointer to leave with — so the open one is held here and the same tap that
+  // opened it shuts it.
+  const [openSub, setOpenSub] = useState<string | null>(null);
+
   const modelRow = (model: Model) =>
     model.efforts.length ? (
       // One row: hover opens the effort submenu (Radix's own behaviour), click
       // picks the model and leaves its effort alone. Splitting the two into
       // separate items would give the row two hover states.
-      <DropdownMenuSub key={model.id}>
+      //
+      // **With no pointer there is no hover, so the click has to open it.** A
+      // touch screen has one gesture where this has two, and spending it on the
+      // pick left every effort level in the app unreachable — so there the row
+      // opens its submenu and the levels below pick the model as well as the
+      // level, which they already do. What is lost is picking a model while
+      // leaving its effort alone, which is one extra tap rather than a state
+      // nobody can reach.
+      <DropdownMenuSub
+        key={model.id}
+        open={CAN_HOVER ? undefined : openSub === model.id}
+        onOpenChange={CAN_HOVER ? undefined : (next) => setOpenSub(next ? model.id : null)}
+      >
         <DropdownMenuSubTrigger
           className="cursor-pointer gap-1 text-ui"
           // The picked model takes a check where the submenu chevron would sit,
@@ -385,10 +404,17 @@ export default function ModelSelector({
           trailingIcon={
             model.id === modelId ? <Check className="ml-auto size-3.5" /> : undefined
           }
-          onClick={() => {
-            onChange(model.id, null);
-            setOpen(false);
-          }}
+          onClick={
+            CAN_HOVER
+              ? () => {
+                  onChange(model.id, null);
+                  setOpen(false);
+                }
+              : // Radix only ever opens on this click, so closing is ours to do.
+                // It runs before Radix's own handler, which then sees a sub that
+                // is still open and leaves it alone.
+                () => setOpenSub((current) => (current === model.id ? null : model.id))
+          }
         >
           {/* Truncated, not wrapped, and the menu is not widened to fit: a
               gateway id is its provider plus its model (`anthropic/claude-
@@ -441,7 +467,14 @@ export default function ModelSelector({
     );
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        // A submenu held open here would reopen with the menu next time.
+        if (!next) setOpenSub(null);
+      }}
+    >
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
