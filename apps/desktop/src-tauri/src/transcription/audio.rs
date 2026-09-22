@@ -146,15 +146,18 @@ fn set_muted(muted: bool) -> bool {
     osascript(&[&format!("set volume output muted {muted}")]).is_ok()
 }
 
-/// Reads `"true"` or `"false"` back out of the AppleScript above.
+/// Reads a mute state back out of whichever tool answered.
 ///
-/// Split from the spawn so it is testable, since the failure it guards is
-/// silent: a machine with no output device answers `missing value`, and taking
-/// that as "not muted" would leave the sound off on the way back out.
+/// Two vocabularies, one function: AppleScript says `true`/`false` and `pactl`
+/// says `Mute: yes`/`Mute: no`. They are folded together rather than split by
+/// platform because the thing worth testing is the same on both — that a reply
+/// this does not recognise answers `None` and never `false`. A machine with no
+/// output device answers `missing value`, and taking that as "not muted" would
+/// leave the sound off on the way back out.
 fn parse_muted(answer: &str) -> Option<bool> {
     match answer.trim() {
-        "true" => Some(true),
-        "false" => Some(false),
+        "true" | "Mute: yes" => Some(true),
+        "false" | "Mute: no" => Some(false),
         _ => None,
     }
 }
@@ -183,16 +186,45 @@ fn osascript(lines: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Every other target answers as though there were nothing to mute. The
-/// setting still draws, since a row that vanishes reads as one the app forgot.
+/// Whether the system output is muted, or `None` where it cannot be read.
+///
+/// `pactl`, and that covers PipeWire too: every desktop this runs on answers
+/// PulseAudio's command surface through `pipewire-pulse`, so probing for
+/// `wpctl` beside it would be a second path to the same server. `@DEFAULT_SINK@`
+/// is resolved by the server, so nothing here has to track which device is
+/// current — the same reason the macOS side moves the *system* output rather
+/// than looking a device up.
+///
+/// Best effort like its macOS counterpart: a machine with no `pactl` records
+/// anyway, silently, and the reader gets the speakers in the transcript rather
+/// than a failed press.
 #[cfg(not(target_os = "macos"))]
 fn read_muted() -> Option<bool> {
-    None
+    parse_muted(&pactl(&["get-sink-mute", "@DEFAULT_SINK@"]).ok()?)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn set_muted(_muted: bool) -> bool {
-    false
+fn set_muted(muted: bool) -> bool {
+    pactl(&["set-sink-mute", "@DEFAULT_SINK@", if muted { "1" } else { "0" }]).is_ok()
+}
+
+/// Runs one `pactl` and hands back its stdout.
+///
+/// A non-zero exit is an error rather than an empty answer, or a refused
+/// `set-sink-mute` would report success and `mute_other_audio` would record a
+/// prior state it never actually changed.
+#[cfg(not(target_os = "macos"))]
+fn pactl(args: &[&str]) -> Result<String> {
+    let output = std::process::Command::new("pactl")
+        .args(args)
+        .output()
+        .context("could not run pactl")?;
+
+    if !output.status.success() {
+        anyhow::bail!("pactl: {}", String::from_utf8_lossy(&output.stderr).trim());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Anything below this peak, over a whole recording, is silence.
@@ -432,7 +464,12 @@ mod tests {
     /// what would leave the sound off after the recording ended.
     #[test]
     fn an_unreadable_output_reads_as_nothing() {
+        assert_eq!(parse_muted("Mute: yes"), Some(true));
+        assert_eq!(parse_muted("Mute: no\n"), Some(false));
         assert_eq!(parse_muted("missing value"), None);
+        // `pactl` answers this for a name no sink matches, and reading it as
+        // "not muted" is exactly the failure this function exists to refuse.
+        assert_eq!(parse_muted("Failure: No such entity"), None);
         assert_eq!(parse_muted(""), None);
     }
 
