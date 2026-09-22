@@ -84,7 +84,7 @@ import { offersFast } from "@/lib/fastMode";
 import { nextEffort } from "@/components/composer/ModelSelector";
 import { nextHarness } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
-import ViewTabs, { type ViewTab } from "@/components/layout/ViewTabs";
+import ViewTabs, { HAS_BROWSER, type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { pickAttachments } from "@/hooks/useAttachments";
 import { useCodeTheme } from "@/hooks/useCodeTheme";
@@ -1961,7 +1961,10 @@ function App() {
   // times a session. `code`, since Option turns a digit's `key` into a symbol.
   useHotkey("view.chat", () => !issuesOpen && setViewTab("chat"));
   useHotkey("view.changes", () => !issuesOpen && setViewTab("changes"));
-  useHotkey("view.browser", () => !issuesOpen && setViewTab("browser"));
+  // Gated with the tab itself, or the chord switches to a view with no tab lit
+  // and no commands behind it — `useHotkey` claims every chord it matches, so an
+  // ungated binding also eats the key from whatever else is on screen.
+  useHotkey("view.browser", () => !issuesOpen && setViewTab("browser"), { enabled: HAS_BROWSER });
   useHotkey("view.files", () => !issuesOpen && setViewTab("files"));
   // ⌘, — every macOS app's preferences chord, and the only way into settings
   // while the sidebar is collapsed and its gear gone with it. Safe to take for
