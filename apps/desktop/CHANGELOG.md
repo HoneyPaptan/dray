@@ -5,6 +5,39 @@ The release job reads the matching section into the GitHub release notes and the
 updater carries it, so this file is what a release says about itself — not a
 second description of it. GitHub's generated commit list is appended below it.
 
+## 0.23.0
+
+### Added
+
+- **Grok Build is Dray's fifth agent harness.** Spawn, stream, resume
+  and stop, with permission cards, questions, subagents and the
+  context ring. Model and effort move on a running session; a stance
+  change respawns it. Fast mode is a switch rather than a second row
+  in the picker, since grok ships its fast tier as its own model.
+- **GitHub issues read beside Linear.** A second tracker on the same
+  surfaces: the issues page, the session's Issue tab and the
+  composer's `#` menu. Auth is `gh`, so there is no key to paste and
+  nothing stored. An issue is named `owner/repo#12`; a bare `#12` is
+  refused, a number alone meaning nothing without a repository.
+  Writes are status alone — GitHub has no priority field.
+- **The agent's task list is drawn in the right panel.** It used to
+  vanish the moment a turn collapsed. The pane opens itself on a list
+  you have not been shown and stays quiet otherwise.
+- **Subagents is now More**, a catch-all tab holding the task list
+  beside the runs. A section with no rows draws nothing.
+- **The Browser view takes the full width**, hiding the sidebar while
+  you are on it and restoring it when you leave. On by default, with
+  a switch in Appearance.
+- **A grok plan gets a Plan tab**, since the approval card is the only
+  copy of it.
+
+### Changed
+
+- **The landing page is the app itself**, drawn from its own component
+  classes and animated in CSS rather than captured as video.
+- **Light mode's add accent is a deeper green** — it was clipped to
+  the sRGB ceiling on displays that can show more.
+
 ## 0.22.4
 
 ### Fixed
