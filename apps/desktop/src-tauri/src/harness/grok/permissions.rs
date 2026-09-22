@@ -129,6 +129,11 @@ pub fn plan_pending(request: &ExitPlanMode, rpc_id: i64) -> (PendingRequest, Vec
     let pending = PendingRequest {
         tool_use_id: request.tool_call_id.clone(),
         tool_name: "exit_plan_mode".to_string(),
+        // The plan does *not* go here, and that is the fix rather than an
+        // omission: this struct is only ever read to rebuild an answer, and a
+        // plan's answer is a fixed outcome that rebuilds nothing. The frontend
+        // reads the **event**, so the plan rides `PermissionRequested.input` —
+        // one copy, in the one place anything looks.
         input: Value::Null,
         options: resolved
             .into_iter()
