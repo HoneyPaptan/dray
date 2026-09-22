@@ -30,7 +30,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { compactTokens, resetTime } from "@/lib/format";
+import { modelTokens, type PlanLimit, type SessionUsage } from "@/lib/usage";
 import { call } from "@/lib/transport";
+import { cn } from "@/lib/utils";
 import { offersFast } from "@/lib/fastMode";
 import { CAN_HOVER } from "@/lib/phoneLayout";
 import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
@@ -178,6 +181,70 @@ function ProviderRow({
   );
 }
 
+/// The dated suffix a harness puts on its own model keys
+/// (`claude-haiku-4-5-20251001`). Cut for the menu: it is 232px wide, and the
+/// date is the part of the name the reader already knows.
+const DATED = /-\d{8}$/;
+
+/// One line about the plan window, in the reader's terms rather than the
+/// wire's. A percentage is information; a reached limit is news, which is why
+/// only the second is coloured.
+function limitLine(limit: PlanLimit, resets: string): string {
+  const suffix = resets ? ` · resets ${resets}` : "";
+  if (limit.usedPercent != null) return `${Math.round(limit.usedPercent * 100)}% of plan used${suffix}`;
+  if (limit.usingOverage) return `Plan limit reached, now billed as usage${suffix}`;
+  return `Usage limit reached${suffix}`;
+}
+
+/// What this session has spent, at the foot of the picker.
+///
+/// Here rather than beside the context ring, which answers a different
+/// question: the ring is how much room the *next turn* has, where this is what
+/// the conversation has cost since it began — the thing you go looking for
+/// exactly when you are deciding which model to move to.
+///
+/// Text, not menu items: nothing here can be picked, and a row that takes
+/// arrow focus and answers nothing is worse than a line that never asked for
+/// it. Each half draws only where the harness reported it, so a session with
+/// no reading at all draws no block.
+function UsageNote({ usage }: { usage: SessionUsage }) {
+  const { perModel, totalTokens, costUsd, limit } = usage;
+  const resets = limit?.resetsAt ? resetTime(limit.resetsAt) : "";
+
+  return (
+    <div className="mt-1 border-t px-2 pt-1.5 pb-0.5 text-ui text-muted-foreground">
+      {perModel.length > 0 && <p className="pb-0.5">Used this session</p>}
+
+      {perModel.map((m) => (
+        <p key={m.model} className="flex items-baseline justify-between gap-3">
+          <span className="truncate">{m.model.replace(DATED, "")}</span>
+          <span className="shrink-0 tabular-nums">{compactTokens(modelTokens(m))}</span>
+        </p>
+      ))}
+
+      {perModel.length > 1 && (
+        <p className="text-foreground flex items-baseline justify-between gap-3">
+          <span>Total</span>
+          <span className="shrink-0 tabular-nums">{compactTokens(totalTokens)}</span>
+        </p>
+      )}
+
+      {costUsd !== null && (
+        <p className="flex items-baseline justify-between gap-3">
+          <span>Cost</span>
+          <span className="shrink-0 tabular-nums">${costUsd.toFixed(2)}</span>
+        </p>
+      )}
+
+      {limit && (
+        <p className={cn("pt-0.5", limit.usedPercent == null && "text-destructive")}>
+          {limitLine(limit, resets)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 /// Which agent runs the session, which model it runs on, and at what effort —
 /// one control, because the three are one decision.
 ///
@@ -203,6 +270,7 @@ export default function ModelSelector({
   onReloadModels,
   onSeedProvider,
   loadingModels = false,
+  usage = null,
 }: {
   harness: Harness;
   onHarnessChange: (harness: Harness) => void;
@@ -241,6 +309,11 @@ export default function ModelSelector({
   /// fresh read lands. A provider never visited seeds nothing and waits.
   onSeedProvider?: (provider: string) => void;
   loadingModels?: boolean;
+  /// What this session has spent, drawn at the foot of the menu. Null where
+  /// the harness has reported nothing, which is the ordinary state on every
+  /// harness but Claude Code — and the whole reason the block is conditional
+  /// rather than drawn empty.
+  usage?: SessionUsage | null;
 }) {
   // Controlled so a click on a submenu trigger can close the whole menu; Radix
   // otherwise keeps the parent open for the submenu it just opened on hover.
@@ -746,6 +819,8 @@ export default function ModelSelector({
             Choose models…
           </DropdownMenuItem>
         )}
+
+        {usage && <UsageNote usage={usage} />}
       </DropdownMenuContent>
 
       <ModelLibraryDialog

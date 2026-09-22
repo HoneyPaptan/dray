@@ -12,6 +12,7 @@ import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { SessionUsage } from "@/lib/usage";
 import type {
   ApprovalPolicy,
   BranchList,
@@ -73,6 +74,10 @@ type ComposerToolbarProps = {
   /// reports rather than sets, and nothing here changes it.
   contextUsage: { used: number; max: number } | null;
 
+  /// What the session has spent so far, drawn inside the model picker. Null
+  /// where the harness reports no usage at all, which is most of them.
+  usage: SessionUsage | null;
+
   /// Where the session runs is fixed at creation, so the last three controls
   /// only exist before one starts.
   isNewSession: boolean;
@@ -118,6 +123,7 @@ export default function ComposerToolbar({
   onToggleWorktree,
   onAttach,
   contextUsage,
+  usage,
   isNewSession,
   busy,
 }: ComposerToolbarProps) {
@@ -163,6 +169,7 @@ export default function ComposerToolbar({
         onReloadModels={onReloadModels}
         onSeedProvider={onSeedProvider}
         loadingModels={loadingModels}
+        usage={usage}
       />
 
       {isNewSession && (

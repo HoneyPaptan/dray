@@ -172,6 +172,7 @@ function App() {
     backgroundTasks,
     liveTaskIds,
     contextUsage,
+    usage,
     error,
     setError,
     handleModelChange,
@@ -2507,6 +2508,7 @@ function App() {
               onToggleWorktree={() => setUseWorktree((v) => !v)}
               onAttach={() => void pickAttachments(selectedSessionId)}
               contextUsage={contextUsage}
+              usage={usage}
               isNewSession={!selectedSessionId}
               busy={busy}
             />
