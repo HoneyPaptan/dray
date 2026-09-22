@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Check,
@@ -37,6 +37,7 @@ import {
   threadLabel,
   type Tone,
 } from "@/lib/pr";
+import { CAN_HOVER } from "@/lib/phoneLayout";
 import { cn } from "@/lib/utils";
 import type {
   MergeMethod,
@@ -232,7 +233,7 @@ export function MissingCli({
       // A rejection is the bridge failing, which is no answer about `gh` — but
       // it leaves the reader on this same pane either way, so it reads as the
       // miss it is indistinguishable from.
-      if (await invoke<boolean>("recheck_gh")) refresh();
+      if (await call<boolean>("recheck_gh")) refresh();
       else setStillMissing(true);
     } catch {
       setStillMissing(true);
@@ -363,7 +364,7 @@ function PrRow({
           size="icon-xs"
           className="-mr-1 shrink-0 text-muted-foreground/60 hover:text-muted-foreground"
           aria-label="Open on GitHub"
-          title="Open on GitHub"
+          title={CAN_HOVER ? "Open on GitHub" : undefined}
           onClick={(e) => {
             // The row toggles on click, and this sits inside it.
             e.stopPropagation();

@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Tooltip as TooltipPrimitive } from "radix-ui"
 
+import { useCanHover } from "@/lib/phoneLayout"
 import { cn } from "@/lib/utils"
 
 function TooltipProvider({
@@ -44,6 +45,13 @@ function TooltipContent({
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  // Nothing to draw where nothing can hover. Withheld here rather than at the
+  // several dozen call sites, and as the *content* rather than the root, so the
+  // trigger keeps working exactly as it did — on touch these open on the tap
+  // meant for the control underneath and then sit over it.
+  const canHover = useCanHover()
+  if (!canHover) return null
+
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content

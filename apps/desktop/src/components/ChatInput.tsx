@@ -48,6 +48,7 @@ import {
   parseSlashCommand,
   slashQuery,
 } from "@/lib/slash";
+import { CAN_HOVER } from "@/lib/phoneLayout";
 import { cn } from "@/lib/utils";
 import type {
   Attachment,
@@ -624,7 +625,15 @@ export default function ChatInput({
               size="icon-sm"
               disabled={stopping ? !onStop : !canSend}
               onClick={stopping ? onStop : undefined}
-              title={stopping ? "Stop" : busy ? "Send — queued onto this turn" : "Send"}
+              title={
+                CAN_HOVER
+                  ? stopping
+                    ? "Stop"
+                    : busy
+                      ? "Send — queued onto this turn"
+                      : "Send"
+                  : undefined
+              }
               // The one filled button that keeps `--primary`. Everywhere but
               // Default light the two tokens are the same value, so this says
               // nothing there; on that palette it is what makes Send the

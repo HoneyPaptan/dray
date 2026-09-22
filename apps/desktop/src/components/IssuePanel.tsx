@@ -12,6 +12,7 @@ import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/format";
 import { shortIdentifier } from "@/lib/issue";
+import { CAN_HOVER } from "@/lib/phoneLayout";
 import { cn } from "@/lib/utils";
 import type { Components } from "streamdown";
 
@@ -271,7 +272,7 @@ function IssueRow({
               variant="ghost"
               size="icon-sm"
               aria-label={`Remove ${issue.identifier}`}
-              title={`Remove ${issue.identifier} from this session`}
+              title={CAN_HOVER ? `Remove ${issue.identifier} from this session` : undefined}
               // Shown on hover and on focus, like every other row-level control
               // here: untagging is rare, and a button on every row at rest is
               // one more thing between the reader and what the row says.
