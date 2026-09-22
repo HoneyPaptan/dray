@@ -76,6 +76,28 @@ export function startSessionDrag(
   const { pointerId, clientX: startX, clientY: startY } = e;
   let live = false;
 
+  // The pointer reports faster than the screen draws — 125Hz and up on an
+  // ordinary mouse — and the work each event asks for is not cheap: `targetAt`
+  // forces a synchronous hit test and a layout, and the emit re-renders every
+  // pane subscribed to the drag. Done per event that is a hundred-odd layout
+  // flushes a second for a ghost that can only move once per frame, which on a
+  // webview without a fast compositor reads as the drag sticking to the
+  // pointer late or seizing outright. Coalesced, the cost is bounded by the
+  // display instead of by the mouse.
+  //
+  // Coordinates are kept rather than the event: a `PointerEvent` held across a
+  // frame is a live object the browser is free to have moved on from.
+  let pending: { x: number; y: number } | null = null;
+  let frame = 0;
+
+  const publish = () => {
+    frame = 0;
+    if (!pending) return;
+    const { x, y } = pending;
+    drag = { sessionId, title, x, y, over: targetAt(x, y) };
+    changed.emit();
+  };
+
   const move = (ev: PointerEvent) => {
     if (!live) {
       if (Math.hypot(ev.clientX - startX, ev.clientY - startY) < THRESHOLD_PX) return;
@@ -85,11 +107,17 @@ export function startSessionDrag(
       // is forced from a body class rather than set on one element.
       document.body.classList.add("session-drag");
     }
-    drag = { sessionId, title, x: ev.clientX, y: ev.clientY, over: targetAt(ev.clientX, ev.clientY) };
-    changed.emit();
+    pending = { x: ev.clientX, y: ev.clientY };
+    if (frame) return;
+    frame = requestAnimationFrame(publish);
   };
 
   const end = (ev: PointerEvent) => {
+    // Or a frame already asked for publishes a position from before the drop,
+    // putting the ghost back on screen after `drag` was cleared.
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    pending = null;
     el.removeEventListener("pointermove", move);
     el.removeEventListener("pointerup", end);
     el.removeEventListener("pointercancel", end);
