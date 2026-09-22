@@ -14,10 +14,7 @@
 
 use std::sync::Mutex;
 
-use tauri::{
-    menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
-    AppHandle, Emitter, Manager, Runtime,
-};
+use tauri::{menu::Menu, AppHandle, Emitter, Manager, Runtime};
 
 pub const QUIT_ID: &str = "quit";
 
@@ -35,89 +32,8 @@ pub struct PendingQuit(Mutex<bool>);
 pub const QUIT_REQUESTED: &str = "quit_requested";
 
 /// Mirrors Tauri's default macOS menu with one substitution: Quit is a custom
-/// item, so ⌘Q arrives as a menu event instead of terminating the process.
-///
-/// The Edit submenu is not decoration — without its items macOS gives the
-/// webview no ⌘C/⌘V at all.
-#[cfg(target_os = "macos")]
-pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let quit = MenuItem::with_id(app, QUIT_ID, "Quit Dray", true, Some("CmdOrCtrl+Q"))?;
-
-    // No accelerator: it is reached rarely and on purpose, and every key this
-    // could take is one the webview wants.
-    let check_update = MenuItem::with_id(
-        app,
-        crate::updater::CHECK_UPDATE_ID,
-        "Check for Updates…",
-        true,
-        None::<&str>,
-    )?;
-
-    let app_menu = Submenu::with_items(
-        app,
-        "Dray",
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, Some(AboutMetadata::default()))?,
-            // Directly under About, where macOS apps have put this since
-            // Sparkle — it answers the same question the About box opens with.
-            &PredefinedMenuItem::separator(app)?,
-            &check_update,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::services(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::show_all(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )?;
-
-    let edit_menu = Submenu::with_items(
-        app,
-        "Edit",
-        true,
-        &[
-            &PredefinedMenuItem::undo(app, None)?,
-            &PredefinedMenuItem::redo(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-        ],
-    )?;
-
-    let view_menu = Submenu::with_items(
-        app,
-        "View",
-        true,
-        &[&PredefinedMenuItem::fullscreen(app, None)?],
-    )?;
-
-    // No Close Window item, and its absence is what frees ⌘W. The predefined
-    // one carries that accelerator built in, and a menu key equivalent is
-    // matched before the responder chain — so with it here ⌘W closed the only
-    // window there is, which arrives as `CloseRequested` and raises the quit
-    // dialog. The app binds ⌘W to closing a tab or a pane instead, and the
-    // window's own close button still asks the question.
-    let window_menu = Submenu::with_items(
-        app,
-        "Window",
-        true,
-        &[
-            &PredefinedMenuItem::minimize(app, None)?,
-            &PredefinedMenuItem::maximize(app, None)?,
-        ],
-    )?;
-
-    Menu::with_items(app, &[&app_menu, &edit_menu, &view_menu, &window_menu])
-}
-
-/// Elsewhere the window's close button is the only route out, and it already
-/// arrives as a preventable event — so the default menu is left alone.
-#[cfg(not(target_os = "macos"))]
+/// The window's close button is the only route out, and it already arrives as
+/// a preventable event — so the default menu is left alone.
 pub fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     Menu::default(app)
 }

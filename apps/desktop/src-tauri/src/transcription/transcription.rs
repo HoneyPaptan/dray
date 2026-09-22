@@ -290,23 +290,8 @@ pub async fn set_transcription_mute(mute: bool) -> Result<(), String> {
 /// answer is only used to report, since a granted-but-muted device still
 /// records zeros and [`Recording::finish`] catches that case anyway.
 ///
-/// Every non-macOS target answers `true` — there is no equivalent gate.
-#[cfg(target_os = "macos")]
-async fn microphone_permitted() -> bool {
-    use tauri_plugin_macos_permissions::{
-        check_microphone_permission, request_microphone_permission,
-    };
-
-    if check_microphone_permission().await {
-        return true;
-    }
-
-    let _ = request_microphone_permission().await;
-
-    check_microphone_permission().await
-}
-
-#[cfg(not(target_os = "macos"))]
+/// Always `true`: there is no permission gate to ask on this platform, and a
+/// device that hands back silence is caught by [`Recording::finish`] anyway.
 async fn microphone_permitted() -> bool {
     true
 }

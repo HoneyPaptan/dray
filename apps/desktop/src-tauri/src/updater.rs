@@ -255,49 +255,14 @@ async fn install(app: AppHandle) -> Result<(), InstallError> {
 /// Success only means Launch Services took the request. A new instance that
 /// starts and then dies looks the same from here, and telling them apart would
 /// want a handshake from the child.
-///
-/// Falling through to the executable covers a dev build, which is a bare Mach-O
-/// with no bundle around it.
 fn relaunch(app: &AppHandle) -> Result<(), String> {
     let exe = tauri::process::current_binary(&app.env())
         .map_err(|e| format!("could not resolve this binary: {e}"))?;
-
-    #[cfg(target_os = "macos")]
-    if let Some(bundle) = bundle_of(&exe) {
-        let out = std::process::Command::new("open")
-            .arg("-n")
-            .arg(bundle)
-            .output()
-            .map_err(|e| format!("could not run `open`: {e}"))?;
-
-        if !out.status.success() {
-            let why = String::from_utf8_lossy(&out.stderr);
-            let why = why.trim();
-            return Err(if why.is_empty() {
-                format!("`open` refused {}", bundle.display())
-            } else {
-                why.to_string()
-            });
-        }
-        return Ok(());
-    }
 
     std::process::Command::new(&exe)
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("could not launch {}: {e}", exe.display()))
-}
-
-/// The `.app` an executable sits in, or `None` for a bare binary.
-///
-/// `…/Dray.app/Contents/MacOS/dray` — the fourth ancestor. Counting it wrong
-/// costs no error, it just falls through to spawning the executable, so this is
-/// pinned rather than left to be read off the call site.
-#[cfg(target_os = "macos")]
-fn bundle_of(exe: &std::path::Path) -> Option<&std::path::Path> {
-    exe.ancestors()
-        .nth(3)
-        .filter(|p| p.extension().is_some_and(|e| e == "app"))
 }
 
 fn emit_status(app: &AppHandle, status: UpdateStatus) {
@@ -306,40 +271,3 @@ fn emit_status(app: &AppHandle, status: UpdateStatus) {
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::bundle_of;
-    use std::path::Path;
-
-    #[test]
-    fn finds_the_bundle_an_executable_sits_in() {
-        assert_eq!(
-            bundle_of(Path::new("/Applications/Dray.app/Contents/MacOS/dray")),
-            Some(Path::new("/Applications/Dray.app"))
-        );
-    }
-
-    /// The stage is stated twice — once for the frontend to match a cure on,
-    /// once for a report that must not carry the message beside it — so the two
-    /// spellings are pinned together rather than left free to drift.
-    #[test]
-    fn a_reported_stage_is_the_one_the_frontend_reads() {
-        for error in [
-            super::InstallError::install("swap failed"),
-            super::InstallError::Relaunch {
-                message: "open refused".into(),
-            },
-        ] {
-            let wire = serde_json::to_value(&error).expect("serializes");
-            assert_eq!(wire["stage"], error.stage());
-        }
-    }
-
-    #[test]
-    fn a_bare_binary_has_no_bundle() {
-        // What `pnpm tauri dev` runs, and what the `open` branch must not take.
-        assert_eq!(bundle_of(Path::new("/x/target/debug/dray")), None);
-        // Deep enough to have a fourth ancestor, but it is not a bundle.
-        assert_eq!(bundle_of(Path::new("/a/b/c/d/dray")), None);
-    }
-}

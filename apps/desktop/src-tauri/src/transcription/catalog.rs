@@ -169,13 +169,7 @@ pub fn find(id: &str) -> Option<&'static TranscriptionModel> {
 /// A suggestion only. Nothing downloads without the reader pressing something,
 /// and every model stays selectable whatever this answers.
 pub fn recommended() -> &'static TranscriptionModel {
-    let id = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "parakeet-unified-en-0.6b"
-    } else {
-        "canary-180m-flash"
-    };
-
-    find(id).expect("recommended id must name a catalog entry")
+    find("canary-180m-flash").expect("recommended id must name a catalog entry")
 }
 
 #[cfg(test)]
