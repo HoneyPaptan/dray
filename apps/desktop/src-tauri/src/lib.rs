@@ -461,6 +461,23 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
     })
 }
 
+/// What every running session is doing, for a client that may have missed the
+/// event saying so.
+///
+/// `session_status` is pushed and never replayed, so a frontend that was not
+/// connected when a turn ended has no way to learn it did. The desktop is never
+/// in that position — its frontend and its manager share a process — but the
+/// phone is, every time the screen sleeps or the network moves.
+///
+/// A session with no entry has no child, which the caller reads as "not
+/// running" rather than as an unknown.
+#[tauri::command]
+async fn live_session_statuses(
+    manager: State<'_, SessionManager>,
+) -> Result<HashMap<String, SessionStatus>, Fail> {
+    Ok(manager.live_statuses().await)
+}
+
 /// What this account has spent against its plan, for the picker to draw instead
 /// of tokens.
 ///
@@ -809,6 +826,7 @@ pub fn run() {
             track_active_day,
             list_slash_commands,
             plan_usage,
+            live_session_statuses,
             files::warm_file_index,
             files::search_files,
             files::list_dir,

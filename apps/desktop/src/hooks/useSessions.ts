@@ -1,6 +1,7 @@
-import { call, subscribeEvent } from "@/lib/transport";
+import { call, IS_REMOTE, subscribeEvent } from "@/lib/transport";
+import { remote } from "@/lib/remoteTransport";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { restoreAttachments } from "@/hooks/useAttachments";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
 import { useDockBadge } from "@/hooks/useDockBadge";
@@ -14,6 +15,7 @@ import {
 import { dropHeld, heldFor, holdEarlyEvent } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
+import { reconcileStatuses } from "@/lib/liveStatus";
 import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
@@ -2340,6 +2342,29 @@ useEffect(() => {
     listenerPromise.then((unlisten) => unlisten());
   };
 }, []);
+
+// Asks the backend what every session is *actually* doing, and corrects any
+// `in_progress` it disagrees with. The rule itself is `reconcileStatuses`,
+// which is where the why lives.
+const reconcileLiveStatuses = useCallback(async () => {
+  const live = await call<Record<string, SessionStatus>>("live_session_statuses");
+
+  setStatusBySession((prev) => reconcileStatuses(prev, live, sessionIndexItemsRef.current));
+}, []);
+
+// On arrival, and on every reconnection after it.
+//
+// Remote-only for the subscription — `watchStatus` never fires on the desktop
+// build — but the first read runs everywhere, since a stale `in_progress` is
+// just as wrong in a desktop window that reloaded its frontend.
+useEffect(() => {
+  void reconcileLiveStatuses().catch(() => {});
+  if (!IS_REMOTE) return;
+
+  return remote.watchStatus((status) => {
+    if (status === "open") void reconcileLiveStatuses().catch(() => {});
+  });
+}, [reconcileLiveStatuses]);
 
 // The backend generates a title a few seconds after a session starts and writes
 // it to the index itself, so this only mirrors what's already on disk. Its own

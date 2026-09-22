@@ -328,6 +328,16 @@ impl StatusTracker {
         (self.status == from).then(|| self.set(to)).flatten()
     }
 
+    /// What this session is doing right now.
+    ///
+    /// The one read that does not go through an event. Every other consumer
+    /// learns a status from `session_status` as it is emitted, which is exactly
+    /// what a client that was not listening at the time cannot do — see
+    /// [`SessionManager::live_statuses`].
+    pub fn current(&self) -> SessionStatus {
+        self.status
+    }
+
     fn set(&mut self, next: SessionStatus) -> Option<SessionStatus> {
         (self.status != next).then(|| {
             self.status = next;
@@ -409,6 +419,30 @@ impl Default for SessionManager {
 }
 
 impl SessionManager {
+    /// What every live session is doing, asked rather than remembered.
+    ///
+    /// **`session_status` is emitted and never replayed, so a client that was
+    /// not connected when one fired can never learn it.** That is survivable on
+    /// the desktop, where the frontend and the manager live and die together,
+    /// and it is not on the phone: a sleeping screen, a network blip or the
+    /// desktop app restarting all drop the socket, and a turn that ends while
+    /// it is down leaves the phone drawing "running" with a Stop button under
+    /// it for the rest of the session — a claim about *now* that nothing will
+    /// ever correct, since the live map outranks the index.
+    ///
+    /// A session absent from this answer has **no child** — settled, never
+    /// resumed, or ended with the app — which the caller reads as "not running"
+    /// rather than as an unknown.
+    pub async fn live_statuses(&self) -> HashMap<String, SessionStatus> {
+        let sessions = self.sessions.lock().await;
+
+        let mut live = HashMap::new();
+        for (id, session) in sessions.iter() {
+            live.insert(id.clone(), session.status.lock().await.current());
+        }
+        live
+    }
+
     /// Routes a prompt to a session: spawns a new child, reuses a live one, or
     /// respawns via `--resume` when the id is known but its process is gone.
     pub async fn send_msg(
