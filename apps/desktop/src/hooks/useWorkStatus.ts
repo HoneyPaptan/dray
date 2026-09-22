@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import type { WorkStatus } from "@/types/events";
 
@@ -30,7 +30,7 @@ export function useWorkStatus(cwd: string, busy: boolean) {
   const read = useRef((at: string) => {
     if (!at) return;
     const token = ++issued.current;
-    void invoke<WorkStatus>("work_status", { cwd: at })
+    void call<WorkStatus>("work_status", { cwd: at })
       .then((next) => {
         cache.set(at, next);
         if (issued.current === token) setStatus(next);

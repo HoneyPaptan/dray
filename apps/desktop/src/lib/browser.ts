@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { call, subscribeEvent } from "@/lib/transport";
 import { useSyncExternalStore } from "react";
 
 
@@ -45,7 +44,7 @@ function subscribe(l: () => void) {
 function start() {
   if (started) return;
   started = true;
-  void listen<{ sessionId: string; tabs: BrowserTab[] }>("browser_tabs", (e) => {
+  void subscribeEvent<{ sessionId: string; tabs: BrowserTab[] }>("browser_tabs", (e) => {
     const { sessionId, tabs } = e.payload;
     // A tab arriving is what the pending new tab was waiting for, whoever
     // opened it — the URL bar, a link in the chat, a popup.
@@ -57,7 +56,7 @@ function start() {
     fetched.add(sessionId);
     notify();
   });
-  void listen<{ sessionId: string; element: PickedElement | null }>("browser_pick", (e) => {
+  void subscribeEvent<{ sessionId: string; element: PickedElement | null }>("browser_pick", (e) => {
     picking.delete(e.payload.sessionId);
     notify();
     pickHandler?.(e.payload.sessionId, e.payload.element);
@@ -66,7 +65,7 @@ function start() {
   // document never saw the key; re-raise it as a synthetic event, which is
   // all `useHotkey` needs. Shifted letters arrive upper-cased, as a real
   // event carries them.
-  void listen<{ key: string; code: string; shift: boolean; alt: boolean; ctrl: boolean }>("cef_key", (e) => {
+  void subscribeEvent<{ key: string; code: string; shift: boolean; alt: boolean; ctrl: boolean }>("cef_key", (e) => {
     const { key, code, shift, alt, ctrl } = e.payload;
     document.dispatchEvent(
       new KeyboardEvent("keydown", {
@@ -86,7 +85,7 @@ function start() {
   // reflow the capture needs happens where nobody is looking. Nothing is
   // drawn on top of that still: it is the page pixel for pixel, so the
   // whole shot is invisible, which is the point.
-  void listen<{ sessionId: string; shooting: boolean; shot: number }>("browser_shooting", (e) => {
+  void subscribeEvent<{ sessionId: string; shooting: boolean; shot: number }>("browser_shooting", (e) => {
     shooting = e.payload.shooting ? e.payload.sessionId : null;
     shot = e.payload.shot;
     const winner = presenter();
@@ -146,7 +145,7 @@ function judgeOcclusion() {
 function fetchTabs(sessionId: string) {
   if (fetched.has(sessionId)) return;
   fetched.add(sessionId);
-  void invoke<BrowserTab[]>("browser_tabs", { sessionId })
+  void call<BrowserTab[]>("browser_tabs", { sessionId })
     .then((tabs) => {
       tabsBySession.set(sessionId, tabs);
       notify();
@@ -185,7 +184,7 @@ export function clearOpenError(sessionId: string) {
 export function openInBrowser(sessionId: string, url: string, newTab = false) {
   openErrors.delete(sessionId);
   notify();
-  return invoke("browser_open", { sessionId, url, newTab }).catch((e: unknown) => {
+  return call("browser_open", { sessionId, url, newTab }).catch((e: unknown) => {
     openErrors.set(sessionId, String(e));
     notify();
     throw e;
@@ -193,23 +192,23 @@ export function openInBrowser(sessionId: string, url: string, newTab = false) {
 }
 
 export function activateTab(sessionId: string, id: number) {
-  return invoke("browser_activate", { sessionId, id });
+  return call("browser_activate", { sessionId, id });
 }
 
 export function closeTab(sessionId: string, id: number) {
-  return invoke("browser_close", { sessionId, id });
+  return call("browser_close", { sessionId, id });
 }
 
 export function navigate(sessionId: string, action: "back" | "forward" | "reload" | "stop" | "hard_reload") {
-  return invoke("browser_nav", { sessionId, action });
+  return call("browser_nav", { sessionId, action });
 }
 
 export function zoom(sessionId: string, action: "in" | "out" | "reset") {
-  return invoke("browser_zoom", { sessionId, action });
+  return call("browser_zoom", { sessionId, action });
 }
 
 export function openDevTools(sessionId: string) {
-  return invoke("browser_devtools", { sessionId });
+  return call("browser_devtools", { sessionId });
 }
 
 // --- Picking an element ------------------------------------------------------
@@ -242,7 +241,7 @@ export function pickElement(sessionId: string, on: boolean) {
   if (on) picking.add(sessionId);
   else picking.delete(sessionId);
   notify();
-  return invoke("browser_pick", { sessionId, start: on });
+  return call("browser_pick", { sessionId, start: on });
 }
 
 /// The block a pick appends to the draft: enough for the agent to find the
@@ -285,7 +284,7 @@ export function setPendingTab(sessionId: string, on: boolean) {
 export type LocalServer = { port: number; process: string; mine: boolean };
 
 export function listLocalServers(sessionId: string) {
-  return invoke<LocalServer[]>("list_local_servers", { sessionId });
+  return call<LocalServer[]>("list_local_servers", { sessionId });
 }
 
 // --- Device viewport ---------------------------------------------------------
@@ -372,7 +371,7 @@ export function useBrowserSnapshot(sessionId: string): Snapshot | null {
 function captureSnapshot(sessionId: string) {
   capturing = true;
   const timeout = new Promise<null>((r) => setTimeout(() => r(null), 400));
-  void Promise.race([invoke<string>("browser_snapshot", { sessionId }), timeout])
+  void Promise.race([call<string>("browser_snapshot", { sessionId }), timeout])
     .catch(() => null)
     .then((url) => {
       capturing = false;
@@ -420,7 +419,7 @@ function present() {
     // The picture stays until the view is back over it, or the pane is a
     // hole for the round trip.
     const held = snapshot;
-    void invoke("browser_layout", {
+    void call("browser_layout", {
       sessionId: winner.sessionId,
       x: r.left,
       y: r.top,
@@ -455,7 +454,7 @@ function present() {
       snapshot = null;
       notify();
     }
-    void invoke("browser_layout", {
+    void call("browser_layout", {
       sessionId: lastSession,
       x: 0,
       y: 0,
@@ -484,7 +483,7 @@ function present() {
 /// read when it arrives, so a hide finishing after its shot is over names
 /// the shot it belonged to and releases nothing.
 function shutterReady(of: number) {
-  void invoke("browser_shutter_ready", { shot: of }).catch(() => undefined);
+  void call("browser_shutter_ready", { shot: of }).catch(() => undefined);
 }
 
 /// What the URL bar opens. A scheme is taken as written; `host:port` looks

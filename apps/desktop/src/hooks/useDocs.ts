@@ -1,7 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { call, subscribeEvent } from "@/lib/transport";
 
 import { openInFiles } from "@/hooks/useOpenFiles";
 import { isMarkdownPath } from "@/lib/markdown";
@@ -223,7 +222,7 @@ export function openDoc(sid: string | null, path: string): void {
   });
 
   const seq = issue(sid, path);
-  invoke<string>("read_doc", { path })
+  call<string>("read_doc", { path })
     .then((text) => {
       if (!current(sid, path, seq)) return;
       patch(sid, path, (doc) => ({
@@ -284,7 +283,7 @@ export function reloadDoc(sid: string | null, path: string) {
   if (doc?.body.status !== "ready" || doc.body.saving) return;
 
   const seq = issue(sid, path);
-  invoke<string>("read_doc", { path })
+  call<string>("read_doc", { path })
     .then((text) => {
       if (!current(sid, path, seq)) return;
       patchReady(sid, path, (body) => ({
@@ -334,7 +333,7 @@ export async function saveDoc(
   patchReady(sid, path, (body) => ({ ...body, saving: true, saveError: null }));
 
   try {
-    const outcome = await invoke<SaveOutcome>("save_doc", { path, text: sent, expect });
+    const outcome = await call<SaveOutcome>("save_doc", { path, text: sent, expect });
     if (!current(sid, path, seq)) return null;
     patchReady(sid, path, (body) =>
       outcome === "stale"
@@ -385,7 +384,7 @@ function refreshDoc(sid: string | null, path: string) {
   if (doc.body.status === "ready" && doc.body.saving) return;
 
   const seq = issue(sid, path);
-  invoke<string>("read_doc", { path })
+  call<string>("read_doc", { path })
     .then((text) => {
       if (!current(sid, path, seq)) return;
       patch(sid, path, (it) =>
@@ -455,7 +454,7 @@ function getVersion() {
 /// Every `watch_docs` call, in the order it was made.
 ///
 /// The command replaces the whole watch set, so the last one to *arrive* is the
-/// one that stands — and two `invoke`s can land in either order. Arm, disarm and
+/// one that stands — and two `call`s can land in either order. Arm, disarm and
 /// re-arm all go through here, so a stop cannot overtake the arming beside it
 /// and a stale set cannot win. StrictMode's mount/unmount/mount is the ordinary
 /// case, not a corner one.
@@ -472,7 +471,7 @@ function watch(paths: string[]): Promise<unknown> {
     // Scoped, since the Files view holds its own open set: one watcher for both
     // would mean whichever panel opened last silently took the other's watch
     // away.
-    .then(() => invoke("watch_docs", { scope: "docs", paths }))
+    .then(() => call("watch_docs", { scope: "docs", paths }))
     .catch(() => {});
   return watching;
 }
@@ -499,7 +498,7 @@ export function useDocWatcher(sid: string | null) {
   // still closed over the last one would re-read a path that session may not
   // even have open.
   useEffect(() => {
-    const un = listen<string>("doc_changed", (event) => refreshDoc(sid, event.payload));
+    const un = subscribeEvent<string>("doc_changed", (event) => refreshDoc(sid, event.payload));
     return () => void un.then((off) => off());
   }, [sid]);
 }

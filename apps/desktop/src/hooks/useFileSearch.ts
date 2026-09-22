@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { useEffect, useRef, useState } from "react";
 
 import type { FileMatch } from "@/types/events";
@@ -33,7 +33,7 @@ export function useFileSearch(cwd: string | null, query: string | null): FileMat
   // `search_files` builds the index itself if this never landed.
   useEffect(() => {
     if (!cwd) return;
-    invoke("warm_file_index", { cwd }).catch((e) => console.error("[file index]", e));
+    call("warm_file_index", { cwd }).catch((e) => console.error("[file index]", e));
   }, [cwd]);
 
   useEffect(() => {
@@ -49,7 +49,7 @@ export function useFileSearch(cwd: string | null, query: string | null): FileMat
     let cancelled = false;
 
     const run = () => {
-      invoke<FileMatch[]>("search_files", { cwd, query, limit: LIMIT })
+      call<FileMatch[]>("search_files", { cwd, query, limit: LIMIT })
         .then((matches) => {
           if (cancelled) return;
           setFiles(matches);

@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import type { Attachment } from "@/types/events";
@@ -48,7 +48,7 @@ export async function addAttachmentPaths(sessionId: string | null, paths: string
   const fresh = paths.filter((path) => !current.some((a) => a.path === path));
   if (!fresh.length) return;
 
-  const added = await invoke<Attachment[]>("read_attachments", { paths: fresh });
+  const added = await call<Attachment[]>("read_attachments", { paths: fresh });
   if (!added.length) return;
 
   // Re-read rather than closing over `current`: the dialog and the reads above

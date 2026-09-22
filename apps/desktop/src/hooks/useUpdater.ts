@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { call, subscribeEvent } from "@/lib/transport";
 
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import type { InstallError, UpdateChannel, UpdateStatus } from "@/types/events";
@@ -88,7 +87,7 @@ export function useUpdater() {
   // normal case in dev rather than a race worth waving at.
   const inFlight = useRef(false);
 
-  // Read at invoke time rather than closed over: a check's `finally` may fire
+  // Read at call time rather than closed over: a check's `finally` may fire
   // under a later effect generation, and it needs the channel picked *now* to
   // know whether the one it just asked about has gone stale.
   const channelRef = useRef(channel);
@@ -99,7 +98,7 @@ export function useUpdater() {
   const checkRef = useRef<(byHand?: boolean) => void>(() => {});
 
   useEffect(() => {
-    const unlisten = listen<UpdateStatus>("update_status", (event) => {
+    const unlisten = subscribeEvent<UpdateStatus>("update_status", (event) => {
       setStatus(event.payload);
     });
 
@@ -111,7 +110,7 @@ export function useUpdater() {
       inFlight.current = true;
       const used = channelRef.current;
       if (byHand) setManual("checking");
-      void invoke("check_update", { channel: used })
+      void call("check_update", { channel: used })
         .then(() => {
           if (!byHand) return;
           // The command emits nothing and still resolves when there is nothing
@@ -139,7 +138,7 @@ export function useUpdater() {
     checkRef.current = check;
     check();
     const timer = setInterval(() => check(), CHECK_INTERVAL_MS);
-    const unlistenMenu = listen("check_update_requested", () => check(true));
+    const unlistenMenu = subscribeEvent("check_update_requested", () => check(true));
 
     return () => {
       void unlisten.then((f) => f());
@@ -167,7 +166,7 @@ export function useUpdater() {
   // where the other way round costs one press of a button that then works.
   const install = useCallback(() => {
     setManual("idle");
-    return invoke("install_update").catch((e: unknown) => {
+    return call("install_update").catch((e: unknown) => {
       console.error("[update install]", e);
       const stage = (e as InstallError | null)?.stage;
       setManual(stage === "relaunch" ? "relaunch_failed" : "install_failed");

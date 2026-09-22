@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 
 import { readLocalStorage } from "@/hooks/useLocalStorage";
@@ -43,7 +43,7 @@ export function cachedApps(): ExternalApp[] {
 /// The apps on this machine that can be handed a path.
 export async function load(): Promise<ExternalApp[]> {
   // Several controls mounting in one frame must not each spawn a scan.
-  inFlight ??= invoke<ExternalApp[]>("list_open_apps")
+  inFlight ??= call<ExternalApp[]>("list_open_apps")
     .then((apps) => (last = apps))
     .catch((err) => {
       // `list_open_apps` is infallible on its own side, so this only fires
@@ -104,7 +104,7 @@ export async function openFileWith(
   // `open -a Finder` on a source file hands Finder a document it has no use
   // for, where selecting it in a window is what picking Finder here means.
   if (app.kind === "files") return revealItemInDir(path);
-  await invoke("open_in_app", { appPath: app.path, path: lineUrl(app, path, line) ?? path });
+  await call("open_in_app", { appPath: app.path, path: lineUrl(app, path, line) ?? path });
 }
 
 /// What a control opening a *directory* offers and remembers, and what one
@@ -135,7 +135,7 @@ export const DIR_OPENER: Opener = {
   choices: (apps) => apps,
   // Any app beats none — this button has to open *something*.
   pick: (apps, stored) => apps.find((app) => app.path === stored) ?? apps[0] ?? null,
-  open: (app, path) => invoke("open_in_app", { appPath: app.path, path }),
+  open: (app, path) => call("open_in_app", { appPath: app.path, path }),
 };
 
 /// Which terminal the reader last had Dray open for them, by bundle path.
@@ -167,7 +167,7 @@ export const TERMINAL_OPENER: Opener = {
     const terminals = TERMINAL_OPENER.choices(apps);
     return terminals.find((app) => app.path === stored) ?? terminals[0] ?? null;
   },
-  open: (app, path) => invoke("open_in_app", { appPath: app.path, path }),
+  open: (app, path) => call("open_in_app", { appPath: app.path, path }),
   label: (app) => `Open in ${app.name}`,
   hint: (app, path) => `Opens ${path} in ${app.name}`,
 };

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { assetUrl } from "@/lib/transport";
 
 import ImageLightbox from "@/components/chat/ImageLightbox";
 import { basename } from "@/lib/format";
@@ -52,7 +52,7 @@ export default function ImageRow({
   // another in the lightbox is the bug this shape rules out.
   const viewable = images
     .map((image) => ({
-      src: image.path ? convertFileSrc(image.path) : image.url,
+      src: image.path ? assetUrl(image.path) : image.url,
       name: image.path ? basename(image.path) : "image",
     }))
     .filter((image): image is { src: string; name: string } => Boolean(image.src));

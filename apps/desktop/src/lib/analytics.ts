@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 /// Reports a feature the frontend owns, for the handful whose only chokepoint
 /// is a click handler — the backend reports its own.
@@ -7,11 +7,11 @@ import { invoke } from "@tauri-apps/api/core";
 /// on every send, so this carries no state and answers no question: a call from
 /// here is a request to report, not a decision that it will be.
 ///
-/// **Never throws and never reports.** A failed `invoke` is swallowed whole,
+/// **Never throws and never reports.** A failed `call` is swallowed whole,
 /// since the one thing worse than a missing event is a feature failing because
 /// counting it did.
 export function trackFeature(feature: string) {
-  void invoke("track_feature", { feature }).catch(() => {});
+  void call("track_feature", { feature }).catch(() => {});
 }
 
 /// Reports that the app is being used today.
@@ -23,5 +23,5 @@ export function trackFeature(feature: string) {
 ///
 /// Swallows failures for the same reason [`trackFeature`] does.
 export function trackActiveDay() {
-  void invoke("track_active_day").catch(() => {});
+  void call("track_active_day").catch(() => {});
 }

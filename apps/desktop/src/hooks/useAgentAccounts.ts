@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import type { AgentAccounts, AuthOption, Harness } from "@/types/events";
 
@@ -37,7 +37,7 @@ export function useAgentAccounts(cwd: string) {
     const mine = ++generation.current;
     setBusy(true);
     try {
-      const next = await invoke<AgentAccounts[]>("agent_accounts", { cwd });
+      const next = await call<AgentAccounts[]>("agent_accounts", { cwd });
       if (mine !== generation.current) return;
       setAgents(next);
       // A read that worked describes the page now, so whatever failed before it
@@ -61,7 +61,7 @@ export function useAgentAccounts(cwd: string) {
   /// Saves a pasted key into the agent's own store.
   ///
   /// Only the key routes reach Rust at all — every other method is a command
-  /// the reader runs themselves, so there is nothing here to invoke for it, and
+  /// the reader runs themselves, so there is nothing here to call for it, and
   /// Refresh is how the page learns a terminal sign-in landed.
   ///
   /// Answers whether it took, so the form closes only on success and a refused
@@ -78,7 +78,7 @@ export function useAgentAccounts(cwd: string) {
       setBusy(true);
       let took = true;
       try {
-        await invoke("add_agent_account", { harness, provider, auth, key });
+        await call("add_agent_account", { harness, provider, auth, key });
       } catch (err) {
         setError(String(err));
         took = false;
@@ -98,7 +98,7 @@ export function useAgentAccounts(cwd: string) {
       setError(null);
       setBusy(true);
       try {
-        await invoke("sign_out_agent", { harness, provider });
+        await call("sign_out_agent", { harness, provider });
       } catch (err) {
         setError(String(err));
       } finally {
@@ -128,7 +128,7 @@ export function useAuthOptions(harness: Harness | null, provider: string | null)
     }
 
     let live = true;
-    invoke<AuthOption[]>("agent_auth_options", { harness, provider })
+    call<AuthOption[]>("agent_auth_options", { harness, provider })
       .then((next) => live && setOptions(next))
       .catch(() => live && setOptions([]));
 

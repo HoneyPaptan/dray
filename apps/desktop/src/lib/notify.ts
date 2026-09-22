@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import type { NoticeKind } from "@/hooks/useNotices";
 
@@ -14,5 +14,5 @@ import type { NoticeKind } from "@/hooks/useNotices";
 /// survives it either way — so a failure must never surface as an error the
 /// reader has to deal with.
 export function notifyOS(sessionId: string, kind: NoticeKind, title: string, body: string) {
-  void invoke("notify_session", { sessionId, kind, title, body }).catch(() => {});
+  void call("notify_session", { sessionId, kind, title, body }).catch(() => {});
 }

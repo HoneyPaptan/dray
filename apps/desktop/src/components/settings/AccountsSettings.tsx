@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowLeft,
@@ -523,7 +523,7 @@ function SignInForm({
               onRun={() => {
                 setRunFailed(null);
                 setRunning(true);
-                void invoke("run_agent_login", {
+                void call("run_agent_login", {
                   harness: agent.harness,
                   provider: effectiveProvider,
                   auth: picked.id,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import { isSettling } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
@@ -70,7 +70,7 @@ branchChanged.subscribe(({ repo, branch }) => {
 
 const isOpen = (pr: PullRequest) => pr.state === "OPEN";
 
-/// What `invoke` rejected with, as the backend meant it.
+/// What `call` rejected with, as the backend meant it.
 ///
 /// Tauri hands the serialized `Err` back, so this is already the right shape —
 /// except when the bridge itself failed, which arrives as a string and has no
@@ -207,7 +207,7 @@ export function usePullRequest(
       latest.set(key, seq);
 
       try {
-        const prs = await invoke<PullRequest[]>("prs_for_branch", { cwd, branch });
+        const prs = await call<PullRequest[]>("prs_for_branch", { cwd, branch });
         // A newer read for this branch is out or already landed; its answer
         // is the one to keep, and it clears `loading` on its own way in.
         if (latest.get(key) !== seq) return;
@@ -302,12 +302,12 @@ export function usePullRequest(
       setActing(true);
       try {
         if (action.kind === "merge") {
-          await invoke("merge_pr", { cwd, number, method: action.method });
+          await call("merge_pr", { cwd, number, method: action.method });
         } else if (action.kind === "delete_branch") {
-          await invoke("delete_branch", { cwd, number });
+          await call("delete_branch", { cwd, number });
         } else {
           const command = action.kind === "reopen" ? "reopen_pr" : "mark_pr_ready";
-          await invoke(command, { cwd, number });
+          await call(command, { cwd, number });
         }
         commit(k, (prev) => ({ ...prev, error: null }));
         // Not key-guarded, and that is the difference from every other write

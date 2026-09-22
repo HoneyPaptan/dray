@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import type { ChangedFile, ChangeSet, FileVersions } from "@/types/events";
 
@@ -153,7 +153,7 @@ export function useChanges(
     inFlight.current = true;
     setLoading(true);
     try {
-      const next = await invoke<ChangeSet>("changes_since", { cwd, baseline, head });
+      const next = await call<ChangeSet>("changes_since", { cwd, baseline, head });
       if (issued.current !== token) return;
       // Cached inside the guard, not before it: a live key's value moves under
       // a stable key, so a stale write would persist there.
@@ -244,7 +244,7 @@ export function useFileVersions(
     }
 
     let live = true;
-    invoke<FileVersions>("file_change", {
+    call<FileVersions>("file_change", {
       cwd,
       base,
       head,

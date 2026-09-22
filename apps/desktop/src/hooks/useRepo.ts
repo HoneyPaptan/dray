@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import { reconcileLog } from "@/lib/commit";
 import type { Commit } from "@/types/events";
@@ -68,7 +68,7 @@ export function useHeadTree(
 
   const read = useCallback(() => {
     const token = ++issued.current;
-    void invoke<string | null>("head_tree", { cwd })
+    void call<string | null>("head_tree", { cwd })
       .then((next) => {
         if (issued.current !== token) return;
         // Identity held on an unchanged id: this feeds a cache key, and a new
@@ -139,7 +139,7 @@ export function useCommitLog(
   const read = useCallback(() => {
     const token = ++issued.current;
     setLoading(true);
-    void invoke<Commit[]>(command, { cwd, limit: LOG_PAGE, skip: 0 })
+    void call<Commit[]>(command, { cwd, limit: LOG_PAGE, skip: 0 })
       .then((page) => {
         if (issued.current !== token) return;
         setCommits((prev) => reconcileLog(prev, page));
@@ -159,7 +159,7 @@ export function useCommitLog(
     paging.current = true;
 
     const token = issued.current;
-    void invoke<Commit[]>(command, {
+    void call<Commit[]>(command, {
       cwd,
       limit: LOG_PAGE,
       skip: commitsRef.current.length,

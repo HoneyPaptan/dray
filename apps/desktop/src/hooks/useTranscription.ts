@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { call, subscribeEvent } from "@/lib/transport";
 
 import { playDictationSound } from "@/lib/sound";
 import type { DownloadProgress, TranscribeOutcome, TranscriptionStatus } from "@/types/events";
@@ -21,7 +20,7 @@ export function useTranscriptionSettings(active: boolean) {
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await invoke<TranscriptionStatus>("transcription_status"));
+      setStatus(await call<TranscriptionStatus>("transcription_status"));
     } catch (e) {
       console.error("could not read transcription settings", e);
     }
@@ -35,7 +34,7 @@ export function useTranscriptionSettings(active: boolean) {
   // that started it, and progress arriving while settings are closed still has
   // to be there when they reopen.
   useEffect(() => {
-    const unlisten = listen<DownloadProgress>("transcription_download_progress", (e) => {
+    const unlisten = subscribeEvent<DownloadProgress>("transcription_download_progress", (e) => {
       const { modelId, received, total, error, cancelled } = e.payload;
 
       setDownloads((prev) => {
@@ -73,7 +72,7 @@ export function useTranscriptionSettings(active: boolean) {
       setDownloads((prev) => ({ ...prev, [modelId]: { received: 0, total: 1 } }));
 
       try {
-        await invoke("download_transcription_model", { modelId });
+        await call("download_transcription_model", { modelId });
       } catch (e) {
         console.error("download failed", e);
         setDownloads((prev) => {
@@ -99,14 +98,14 @@ export function useTranscriptionSettings(active: boolean) {
       return rest;
     });
 
-    await invoke("cancel_transcription_download", { modelId }).catch((e) =>
+    await call("cancel_transcription_download", { modelId }).catch((e) =>
       console.error("could not cancel download", e),
     );
   }, []);
 
   const remove = useCallback(
     async (modelId: string) => {
-      await invoke("delete_transcription_model", { modelId });
+      await call("delete_transcription_model", { modelId });
       await refresh();
     },
     [refresh],
@@ -114,7 +113,7 @@ export function useTranscriptionSettings(active: boolean) {
 
   const selectModel = useCallback(
     async (modelId: string | null) => {
-      await invoke("select_transcription_model", { modelId });
+      await call("select_transcription_model", { modelId });
       await refresh();
     },
     [refresh],
@@ -122,7 +121,7 @@ export function useTranscriptionSettings(active: boolean) {
 
   const selectDevice = useCallback(
     async (device: string | null) => {
-      await invoke("select_transcription_device", { device });
+      await call("select_transcription_device", { device });
       await refresh();
     },
     [refresh],
@@ -130,7 +129,7 @@ export function useTranscriptionSettings(active: boolean) {
 
   const setMute = useCallback(
     async (mute: boolean) => {
-      await invoke("set_transcription_mute", { mute });
+      await call("set_transcription_mute", { mute });
       await refresh();
     },
     [refresh],
@@ -223,7 +222,7 @@ export function useRecorder<T>({
     let live = true;
     const timer = setInterval(async () => {
       try {
-        const next = await invoke<number>("transcription_level");
+        const next = await call<number>("transcription_level");
         if (live) setLevel(next);
       } catch {
         // A level that cannot be read is not worth interrupting a recording for.
@@ -247,7 +246,7 @@ export function useRecorder<T>({
     const spokenFrom = liveTarget.current;
 
     try {
-      const refusal = await invoke<{ kind: string } | null>("start_transcription");
+      const refusal = await call<{ kind: string } | null>("start_transcription");
 
       if (refusal?.kind === "needsModel") {
         handlers.current.onNeedsModel();
@@ -330,7 +329,7 @@ export function useRecorder<T>({
     setState("transcribing");
 
     try {
-      apply(await invoke<TranscribeOutcome>("stop_transcription"));
+      apply(await call<TranscribeOutcome>("stop_transcription"));
     } catch (e) {
       console.error("transcription failed", e);
       handlers.current.onMessage(String(e));
@@ -352,7 +351,7 @@ export function useRecorder<T>({
     handlers.current.onMessage(null);
 
     try {
-      apply(await invoke<TranscribeOutcome>("retry_transcription", { path: savedAudio }));
+      apply(await call<TranscribeOutcome>("retry_transcription", { path: savedAudio }));
     } catch (e) {
       console.error("retrying the transcription failed", e);
       // The file is gone or unreadable, so the offer cannot stand: leaving
@@ -375,7 +374,7 @@ export function useRecorder<T>({
     handlers.current.onMessage(null);
 
     try {
-      await invoke("cancel_transcription").catch(() => {});
+      await call("cancel_transcription").catch(() => {});
     } finally {
       inFlight.current = false;
     }

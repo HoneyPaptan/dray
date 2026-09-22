@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { call, subscribeEvent } from "@/lib/transport";
 
 import {
   AlertDialog,
@@ -28,7 +27,7 @@ export default function QuitDialog() {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    const unlisten = listen("quit_requested", () => setOpen(true));
+    const unlisten = subscribeEvent("quit_requested", () => setOpen(true));
     return () => void unlisten.then((f) => f());
   }, []);
 
@@ -40,7 +39,7 @@ export default function QuitDialog() {
         // Tells the backend the question was answered. Left unsent, the next
         // ⌘Q would be read as the second half of an unanswered pair and exit
         // without asking.
-        if (!next) void invoke("dismiss_quit");
+        if (!next) void call("dismiss_quit");
       }}
     >
       <AlertDialogContent>
@@ -55,7 +54,7 @@ export default function QuitDialog() {
             source order is the order on screen. */}
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction destructive onClick={() => void invoke("confirm_quit")}>
+          <AlertDialogAction destructive onClick={() => void call("confirm_quit")}>
             Quit
           </AlertDialogAction>
         </AlertDialogFooter>

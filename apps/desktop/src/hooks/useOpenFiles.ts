@@ -1,7 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { call, subscribeEvent } from "@/lib/transport";
 
 import type { FileBody } from "@/types/events";
 
@@ -156,7 +155,7 @@ export function closeFile(sid: string | null, path: string) {
 /// the text under them.
 function read(sid: string, path: string) {
   const seq = issue(sid, path);
-  invoke<FileBody>("read_file", { path })
+  call<FileBody>("read_file", { path })
     .then((body) => {
       if (!current(sid, path, seq)) return;
       patch(sid, path, (file) => ({ ...file, state: { status: "ready", body } }));
@@ -209,14 +208,14 @@ const SCOPE = "files";
 
 /// Every `watch_docs` call for this scope, in the order it was made — the same
 /// chain [useDocWatcher](./useDocs.ts) keeps, and for the same reason: the
-/// command replaces the whole set for a scope, and two `invoke`s can land in
+/// command replaces the whole set for a scope, and two `call`s can land in
 /// either order. A failed call is swallowed so one cannot break the chain for
 /// the rest of the run.
 let watching: Promise<unknown> = Promise.resolve();
 
 function watch(paths: string[]): Promise<unknown> {
   watching = watching
-    .then(() => invoke("watch_docs", { scope: SCOPE, paths }))
+    .then(() => call("watch_docs", { scope: SCOPE, paths }))
     .catch(() => {});
   return watching;
 }
@@ -244,7 +243,7 @@ export function useOpenFilesWatcher(sid: string | null) {
   // still closed over the last one would re-read a path that session may not
   // even have open.
   useEffect(() => {
-    const un = listen<string>("doc_changed", (event) => {
+    const un = subscribeEvent<string>("doc_changed", (event) => {
       if (!sid) return;
       if (state(sid).open.some((file) => file.path === event.payload)) {
         read(sid, event.payload);

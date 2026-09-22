@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { pushNotice } from "@/hooks/useNotices";
@@ -373,7 +373,7 @@ async function send(
   rollback: Rollback,
 ) {
   try {
-    const next = await invoke<IssueDetail>("update_issue", {
+    const next = await call<IssueDetail>("update_issue", {
       identifier: issue.identifier,
       id: issue.id,
       stateId: patch.state?.id ?? null,
@@ -434,7 +434,7 @@ export function issueErrorText(error: IssueUnavailable, tracker: IssueTracker = 
   }
 }
 
-/// What `invoke` rejected with, as the backend meant it.
+/// What `call` rejected with, as the backend meant it.
 ///
 /// Tauri hands the serialized `Err` back, so this is already the right shape —
 /// except when the bridge itself failed, which arrives as a string with no kind
@@ -537,7 +537,7 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
     const reading = issueGeneration();
 
     const run = () => {
-      invoke<Issue[]>("list_issues", { query, limit: ISSUE_LIST_LIMIT })
+      call<Issue[]>("list_issues", { query, limit: ISSUE_LIST_LIMIT })
         .then((next) => {
           if (cancelled) return;
           remember(key, next, reading);
@@ -646,7 +646,7 @@ export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "lin
     if (!active || (filters && !staleFilters)) return;
 
     let live = true;
-    invoke<IssueFilters>("list_issue_filters", { tracker, repo: wantedRepo })
+    call<IssueFilters>("list_issue_filters", { tracker, repo: wantedRepo })
       .then((next) => {
         if (!live) return;
         setFilters(next);
@@ -784,7 +784,7 @@ export function useSessionIssues(issues: IssueRef[], active: boolean) {
         // one. It is the stable half: an issue moved to another team renumbers,
         // and a lookup by the recorded spelling then answers "no such issue" for
         // work that is very much still there.
-        invoke<IssueDetail>("get_issue", { identifier, id: idFor.get(identifier) ?? null })
+        call<IssueDetail>("get_issue", { identifier, id: idFor.get(identifier) ?? null })
           .then((detail) => {
             rememberDetail(identifier, detail, reading);
             return detail;

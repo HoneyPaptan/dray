@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { useEffect, useState } from "react";
 
 import type { Harness, SlashCommand } from "@/types/events";
@@ -48,7 +48,7 @@ export function useSlashCommands(
     // on top of this one's.
     let cancelled = false;
 
-    invoke<SlashCommand[]>("list_slash_commands", { cwd, harness })
+    call<SlashCommand[]>("list_slash_commands", { cwd, harness })
       .then((list) => {
         cache.set(key, list);
         if (!cancelled) setAnswer({ key, commands: list });

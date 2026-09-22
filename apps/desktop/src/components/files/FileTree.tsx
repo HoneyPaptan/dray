@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
 import FileIcon from "@/components/FileIcon";
@@ -54,7 +54,7 @@ export default function FileTree({
 
   const list = useCallback(
     async (dir: string) => {
-      const entries = await invoke<DirEntry[]>("list_dir", { cwd, dir }).catch(() => null);
+      const entries = await call<DirEntry[]>("list_dir", { cwd, dir }).catch(() => null);
       // A directory that cannot be read keeps whatever it had: a deleted one is
       // about to disappear from its parent's listing anyway, and blanking it
       // would take the rows with it a frame early.

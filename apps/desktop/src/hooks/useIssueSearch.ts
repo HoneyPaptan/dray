@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { useEffect, useRef, useState } from "react";
 
 import { cachedIssues, ISSUE_LIST_LIMIT, rememberIssues } from "@/hooks/useIssues";
@@ -73,7 +73,7 @@ async function repoFor(cwd: string): Promise<string | null> {
   const held = repos.get(cwd);
   if (held !== undefined) return held;
 
-  const repo = await invoke<string | null>("github_repo", { cwd }).catch(() => null);
+  const repo = await call<string | null>("github_repo", { cwd }).catch(() => null);
   repos.set(cwd, repo);
 
   return repo;
@@ -209,7 +209,7 @@ export function useIssueSearch(
     const asked = queryFor(query, tracker, repo ?? null);
 
     const run = () => {
-      invoke<Issue[]>("list_issues", { query: asked, limit: ISSUE_LIST_LIMIT })
+      call<Issue[]>("list_issues", { query: asked, limit: ISSUE_LIST_LIMIT })
         .then((matches) => {
           // Filed whether or not this read still has a picker to draw into: the
           // answer is as true for the next `#` as for this one, and the reader

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import { markDisagrees, pickPrMark, sameMark } from "@/lib/pr";
 import { branchChanged, inRepo, panelRead } from "@/lib/prSync";
@@ -173,7 +173,7 @@ export function usePrMarks(repoPaths: string[]) {
       const attempt = (async () => {
         let answer: Map<string, PrMark>;
         try {
-          answer = marksByBranch(await invoke<PrMark[]>("pr_marks", { cwd: path }));
+          answer = marksByBranch(await call<PrMark[]>("pr_marks", { cwd: path }));
         } catch {
           // A failed read changes nothing at all — it neither writes rows nor
           // stamps, and both halves of that are load-bearing.

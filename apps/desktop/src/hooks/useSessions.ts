@@ -1,5 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { call, subscribeEvent } from "@/lib/transport";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { restoreAttachments } from "@/hooks/useAttachments";
@@ -238,7 +237,7 @@ export function useSessions() {
     // A single list held the *previous* harness's answer until the next landed,
     // which drew Claude's models under pi's mark for the second pi's read
     // spawns a child for. Blanking it instead just moved the flaw: every switch
-    // then emptied the menu for the frame an `invoke` takes, so the two
+    // then emptied the menu for the frame an `call` takes, so the two
     // harnesses whose lists are tables started flickering too.
     //
     // Keyed, both go away. A harness already visited answers from here on the
@@ -447,7 +446,7 @@ const handleAttachProject = async () => {
 
   try {
     // Returns the list already sorted, so the attached project is at the front.
-    setProjects(await invoke<Project[]>("add_project", { path: picked }));
+    setProjects(await call<Project[]>("add_project", { path: picked }));
     setProjectPath(picked);
   } catch (e) {
     setError(String(e));
@@ -459,7 +458,7 @@ const handleAttachProject = async () => {
 // moves to whatever is left, since a pick nothing lists can still be sent in.
 const handleRemoveProject = async (path: string) => {
   try {
-    const left = await invoke<Project[]>("remove_project", { path });
+    const left = await call<Project[]>("remove_project", { path });
     setProjects(left);
     if (projectPath === path) setProjectPath(left[0]?.path ?? null);
   } catch (e) {
@@ -472,7 +471,7 @@ const handleRemoveProject = async (path: string) => {
 // project between them.
 const setProjectSpace = async (path: string, space: string | null) => {
   try {
-    setProjects(await invoke<Project[]>("set_project_space", { path, space }));
+    setProjects(await call<Project[]>("set_project_space", { path, space }));
   } catch (e) {
     setError(String(e));
   }
@@ -484,7 +483,7 @@ const setProjectSpace = async (path: string, space: string | null) => {
 // which spaces exist in step with the tags.
 const retagSpace = async (from: string, to: string | null) => {
   try {
-    setProjects(await invoke<Project[]>("retag_space", { from, to }));
+    setProjects(await call<Project[]>("retag_space", { from, to }));
     return true;
   } catch (e) {
     setError(String(e));
@@ -499,7 +498,7 @@ const handleSelectProject = (path: string | null) => {
   setProjectPath(path);
   if (path === null) return;
   // Fire and forget: losing the remembered pick costs one dropdown next launch.
-  void invoke("set_last_selected_project", { path }).catch(() => {});
+  void call("set_last_selected_project", { path }).catch(() => {});
 };
 
 // Checks the branch out for real, so the picker is the only thing that moves the
@@ -508,7 +507,7 @@ const runCheckout = async (target: string, stash: boolean) => {
   if (!projectPath) return;
 
   try {
-    const list = await invoke<BranchList>("checkout_branch", {
+    const list = await call<BranchList>("checkout_branch", {
       cwd: projectPath,
       branch: target,
       stash,
@@ -535,7 +534,7 @@ const handleSelectBranch = async (target: string) => {
 
   let list: BranchList;
   try {
-    list = await invoke<BranchList>("list_branches", { cwd: projectPath });
+    list = await call<BranchList>("list_branches", { cwd: projectPath });
     setBranches(list);
   } catch (e) {
     setError(String(e));
@@ -642,7 +641,7 @@ const upsertSession = (snapshot: SessionSnapshot) =>
 /// and the card it expanded for was gone. Said once here instead of at every
 /// site that loads a transcript.
 ///
-/// The drop is taken *outside* the updater. React may invoke one twice —
+/// The drop is taken *outside* the updater. React may call one twice —
 /// StrictMode does in development — and a hold consumed from inside it leaves
 /// the second invocation building a state with nothing merged into it.
 /// `mergeEvents` is exact by id, so running this more often than needed costs a
@@ -781,7 +780,7 @@ const handleSendMsg = async (
   }
 
   try {
-    const outcome = await invoke<SendOutcome>("send_msg", {
+    const outcome = await call<SendOutcome>("send_msg", {
       sessionId,
       prompt: message,
       attachmentPaths,
@@ -865,7 +864,7 @@ const handleSendMsg = async (
     );
     applySentIssues();
   } catch (e) {
-    // A rejected invoke means the turn never started, so nothing will arrive to
+    // A rejected call means the turn never started, so nothing will arrive to
     // clear the status — release it here rather than leaving the composer stuck.
     // Unless a turn was already running: that one is untouched by this prompt
     // failing, and clearing it would strand a live session as idle.
@@ -904,7 +903,7 @@ const handleCancelQueued = async (): Promise<QueuedMessage | null> => {
   if (!selectedSessionId) return null;
   const sessionId = selectedSessionId;
   try {
-    const cancelled = await invoke<QueuedMessage | null>("cancel_queued", { sessionId });
+    const cancelled = await call<QueuedMessage | null>("cancel_queued", { sessionId });
     // Nothing to take back, so what is drawn is a row the backend no longer
     // holds — a prompt whose delivery failed before it could mint the event
     // that retires it, or a queue that died with its child. Cleared rather than
@@ -940,7 +939,7 @@ const handleInterrupt = async () => {
   const fail = failUnlessLeft();
   if (!selectedSessionId) return;
   try {
-    await invoke("interrupt_session", { sessionId: selectedSessionId });
+    await call("interrupt_session", { sessionId: selectedSessionId });
   } catch (e) {
     fail(e);
   }
@@ -957,7 +956,7 @@ const handleStopTask = async (taskId: string) => {
   const fail = failUnlessLeft();
   if (!selectedSessionId) return;
   try {
-    await invoke("stop_task", { sessionId: selectedSessionId, taskId });
+    await call("stop_task", { sessionId: selectedSessionId, taskId });
   } catch (e) {
     fail(e);
   }
@@ -979,7 +978,7 @@ const handleRespondPermission = async (
 ) => {
   const fail = failUnlessLeft();
   try {
-    await invoke("respond_permission", { sessionId, requestId, optionId });
+    await call("respond_permission", { sessionId, requestId, optionId });
   } catch (e) {
     fail(e);
   }
@@ -992,7 +991,7 @@ const handleAnswerQuestions = async (
 ) => {
   const fail = failUnlessLeft();
   try {
-    await invoke("answer_questions", { sessionId, requestId, answers });
+    await call("answer_questions", { sessionId, requestId, answers });
   } catch (e) {
     fail(e);
   }
@@ -1137,7 +1136,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
   }
 
   try {
-    const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
+    const snapshot = await call<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) {
       // Held whoever asked for it — a loaded transcript is worth having and the
       // sweep decides when it stops being. The *answer* is the other question:
@@ -1208,7 +1207,7 @@ const handleSelectSessionIndexItem = async (sessionId: string): Promise<boolean>
 const detachSession = async (sessionId: string) => {
   const fail = failUnlessLeft();
   try {
-    const updated = await invoke<SessionIndexItem | null>("detach_session", {
+    const updated = await call<SessionIndexItem | null>("detach_session", {
       sessionId,
     });
     if (!updated) return;
@@ -1231,7 +1230,7 @@ const setSessionFlags = async (
 ): Promise<boolean> => {
   const fail = failUnlessLeft();
   try {
-    const updated = await invoke<SessionIndexItem | null>("set_session_flags", {
+    const updated = await call<SessionIndexItem | null>("set_session_flags", {
       sessionId,
       archived: flags.archived ?? null,
       pinned: flags.pinned ?? null,
@@ -1302,7 +1301,7 @@ const applyIssues = (sessionId: string, issues: IssueRef[]) => {
 const unlinkIssue = async (sessionId: string, key: string) => {
   const fail = failUnlessLeft();
   try {
-    applyIssues(sessionId, await invoke<IssueRef[]>("unlink_issue", { sessionId, key }));
+    applyIssues(sessionId, await call<IssueRef[]>("unlink_issue", { sessionId, key }));
   } catch (e) {
     fail(e);
   }
@@ -1429,7 +1428,7 @@ const removeWorktree = (sessionId: string, origin: "asked" | "tidy" = "asked") =
   // may have moved, and the title is what says which session the card is about.
   const title = sessionIndexItems.find((i) => i.sessionId === sessionId)?.title ?? "";
 
-  void invoke<SessionIndexItem>("remove_session_worktree", { sessionId })
+  void call<SessionIndexItem>("remove_session_worktree", { sessionId })
     // Two callbacks rather than `.then(…).catch(…)`, so the failure card can
     // only ever report the backend refusing. Chained, a throw out of the write
     // above would land in the same handler and be described as a cleanup that
@@ -1460,7 +1459,7 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 
   let snapshot: SessionSnapshot;
   try {
-    snapshot = await invoke<SessionSnapshot>("fork_session", {
+    snapshot = await call<SessionSnapshot>("fork_session", {
       sessionId,
       forkId,
       worktree,
@@ -1498,7 +1497,7 @@ const forkSession = async (sessionId: string, worktree: boolean) => {
 const deleteSession = async (sessionId: string) => {
   const fail = failUnlessLeft();
   try {
-    await invoke<boolean>("delete_session", { sessionId });
+    await call<boolean>("delete_session", { sessionId });
   } catch (e) {
     fail(e);
     return;
@@ -1532,7 +1531,7 @@ const deleteSession = async (sessionId: string) => {
 // the side just left back on screen under a toggle saying otherwise.
 useEffect(() => {
   let cancelled = false;
-  invoke<SessionIndexItem[]>("list_session_index_items", { archived: showArchived })
+  call<SessionIndexItem[]>("list_session_index_items", { archived: showArchived })
     .then((items) => {
       if (cancelled) return;
       setSessionIndexItems(items);
@@ -1550,7 +1549,7 @@ useEffect(() => {
   let cancelled = false;
   setLoadingModels(true);
 
-  invoke<Model[]>("list_models", { harness })
+  call<Model[]>("list_models", { harness })
     .then((list) => {
       // Guarded because pi's read spawns a child and can take a moment, so a
       // reader switching harness twice would otherwise have the first answer
@@ -1591,7 +1590,7 @@ useEffect(() => {
 /// with a CLI update without restarting. Claude Code is still a table, so this
 /// costs it one round trip and answers the same thing.
 const refreshModels = () => {
-  invoke("refresh_models")
+  call("refresh_models")
     .catch(() => {})
     .finally(() => setModelsGeneration((n) => n + 1));
 };
@@ -1617,7 +1616,7 @@ const seedFxModels = (provider: string) => {
 };
 
 useEffect(() => {
-  invoke<Project[]>("list_projects")
+  call<Project[]>("list_projects")
     .then((list) => {
       setProjects(list);
       // Sorted most-recently-selected first, so the front of the list *is* the
@@ -1641,7 +1640,7 @@ useEffect(() => {
 
   let cancelled = false;
 
-  invoke<BranchList>("list_branches", { cwd: projectPath })
+  call<BranchList>("list_branches", { cwd: projectPath })
     .then((list) => {
       if (cancelled) return;
       setBranches(list);
@@ -1663,7 +1662,7 @@ useEffect(() => {
 
 useEffect(() => {
   const setupListener = async () => {
-    const unlisten = await listen<AgentEvent>("agent_event", (event) => {
+    const unlisten = await subscribeEvent<AgentEvent>("agent_event", (event) => {
       // console.log(event);
 
       const agentEvent = event.payload;
@@ -2061,7 +2060,7 @@ const ensureLoaded = async (sessionId: string) => {
   if (loadingRef.current.has(sessionId)) return;
   loadingRef.current.add(sessionId);
   try {
-    const snapshot = await invoke<SessionSnapshot | null>("get_session_by_id", { sessionId });
+    const snapshot = await call<SessionSnapshot | null>("get_session_by_id", { sessionId });
     if (snapshot) upsertSession(snapshot);
   } catch (e) {
     console.error("failed to load a split pane", e);
@@ -2137,7 +2136,7 @@ const markSessionRead = (sessionId: string) => {
   dismissNotice(sessionId, ANSWERED_BY_OPENING);
   // Cleared locally first — the click must feel instant. Losing the write
   // costs one stale unread dot after a restart, so a failure isn't surfaced.
-  void invoke("mark_session_read", { sessionId, read: true }).catch(() => {});
+  void call("mark_session_read", { sessionId, read: true }).catch(() => {});
 };
 
 /// The reader asked for the unread mark back, from the row's own menu. The
@@ -2150,7 +2149,7 @@ const keptUnreadRef = useRef<string | null>(null);
 const markSessionUnread = (sessionId: string) => {
   keptUnreadRef.current = sessionId;
   setStatusBySession((prev) => ({ ...prev, [sessionId]: "completed" }));
-  void invoke("mark_session_read", { sessionId, read: false }).catch(() => {});
+  void call("mark_session_read", { sessionId, read: false }).catch(() => {});
 };
 
 /// Tell the reader about something that happened in a session, on exactly one
@@ -2267,7 +2266,7 @@ selectSessionRef.current = handleSelectSessionIndexItem;
 // The reader clicked a desktop banner. Rust has already raised the window; the
 // only thing left is to go to the session it was about.
 useEffect(() => {
-  const listenerPromise = listen<string>("notification_activated", (event) => {
+  const listenerPromise = subscribeEvent<string>("notification_activated", (event) => {
     void selectSessionRef.current(event.payload);
   });
 
@@ -2277,7 +2276,7 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
-  const listenerPromise = listen<SessionStatusEvent>("session_status", (event) => {
+  const listenerPromise = subscribeEvent<SessionStatusEvent>("session_status", (event) => {
     const { sessionId, status, modified } = event.payload;
 
     // Only completion moves this, and the sidebar sorts by it — so a session
@@ -2342,7 +2341,7 @@ useEffect(() => {
 // spawned this one; yanking them out of it is the opposite of what fanning work
 // out is for.
 useEffect(() => {
-  const listenerPromise = listen<SessionIndexItem>("session_created", (event) => {
+  const listenerPromise = subscribeEvent<SessionIndexItem>("session_created", (event) => {
     const item = event.payload;
     // A new session is never archived, so it belongs to the active list only.
     if (showArchivedRef.current) return;
@@ -2360,7 +2359,7 @@ useEffect(() => {
 }, []);
 
 useEffect(() => {
-  const listenerPromise = listen<SessionTitleEvent>("session_title", (event) => {
+  const listenerPromise = subscribeEvent<SessionTitleEvent>("session_title", (event) => {
     const { sessionId, title } = event.payload;
 
     setSessionIndexItems((prev) =>
@@ -2386,7 +2385,7 @@ useEffect(() => {
 // instead of waiting on a harness switch or a restart. Only fired when the
 // answer is news, so an ordinary send costs nothing.
 useEffect(() => {
-  const listenerPromise = listen("models_changed", () => reloadModels());
+  const listenerPromise = subscribeEvent("models_changed", () => reloadModels());
   return () => {
     listenerPromise.then((unlisten) => unlisten());
   };

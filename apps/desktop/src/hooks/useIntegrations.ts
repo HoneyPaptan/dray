@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { useCallback, useEffect, useState } from "react";
 
 import { forgetIssues } from "@/hooks/useIssues";
@@ -20,7 +20,7 @@ export function useIntegrations(enabled: boolean) {
     if (!enabled) return;
 
     let live = true;
-    invoke<IntegrationsView>("get_integrations")
+    call<IntegrationsView>("get_integrations")
       .then((next) => live && setIntegrations(next))
       .catch((e) => console.error("[integrations]", e));
 
@@ -39,7 +39,7 @@ export function useIntegrations(enabled: boolean) {
     setBusy(true);
     setError(null);
     try {
-      setIntegrations(await invoke<IntegrationsView>("connect_linear", { key }));
+      setIntegrations(await call<IntegrationsView>("connect_linear", { key }));
       // Every cached answer was taken with no key, including the
       // `not_connected` failure the page's empty state was drawn from — so
       // without this, connecting leaves the reader looking at the form they
@@ -73,8 +73,8 @@ export function useIntegrations(enabled: boolean) {
   const recheckGithub = useCallback(async () => {
     setBusy(true);
     try {
-      await invoke<boolean>("recheck_gh").catch(() => false);
-      setIntegrations(await invoke<IntegrationsView>("get_integrations"));
+      await call<boolean>("recheck_gh").catch(() => false);
+      setIntegrations(await call<IntegrationsView>("get_integrations"));
       forgetIssues();
     } catch (e) {
       console.error("[integrations]", e);
@@ -87,7 +87,7 @@ export function useIntegrations(enabled: boolean) {
     setBusy(true);
     setError(null);
     try {
-      setIntegrations(await invoke<IntegrationsView>("disconnect_linear"));
+      setIntegrations(await call<IntegrationsView>("disconnect_linear"));
       // The other direction, and the same reason: a list read with the old key
       // must not outlive it.
       forgetIssues();

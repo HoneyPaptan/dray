@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import type { AgentAvailability, Harness } from "@/types/events";
 
@@ -23,7 +23,7 @@ function emit() {
 function subscribe(listener: () => void) {
   listeners.add(listener);
   if (!answers && !inFlight) {
-    inFlight = invoke<AgentAvailability[]>("agent_availability")
+    inFlight = call<AgentAvailability[]>("agent_availability")
       .then((next) => {
         answers = next;
         emit();

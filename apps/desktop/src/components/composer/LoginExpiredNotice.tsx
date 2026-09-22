@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, KeyRound, SquareTerminal, TriangleAlert } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -64,7 +64,7 @@ export default function LoginExpiredNotice({
 
   const logIn = async () => {
     try {
-      await invoke("open_login_terminal", { harness: agent.harness, cwd });
+      await call("open_login_terminal", { harness: agent.harness, cwd });
     } catch (err) {
       // A failed launch must not clear the block: nothing was opened, so the
       // reader has not been handed the cure yet.

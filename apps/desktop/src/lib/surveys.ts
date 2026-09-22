@@ -17,7 +17,7 @@
 // the refusal. Reading `analytics_enabled` here as well would be a second
 // reader free to disagree with the first, which is what DRA-199 was.
 import posthog from "posthog-js";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import type { SurveyIdentity } from "@/types/events";
 
@@ -52,7 +52,7 @@ export async function startSurveys(): Promise<void> {
 
   let identity: SurveyIdentity | null = null;
   try {
-    identity = await invoke<SurveyIdentity | null>("analytics_identity");
+    identity = await call<SurveyIdentity | null>("analytics_identity");
   } catch (e) {
     // Best effort, like every other analytics path: the one thing worse than a
     // survey never appearing is the app failing because one could not.

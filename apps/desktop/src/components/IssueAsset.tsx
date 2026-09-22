@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { Download, File } from "lucide-react";
 
 import ImageLightbox from "@/components/chat/ImageLightbox";
@@ -56,7 +56,7 @@ function load(url: string): Promise<IssueAsset | null> {
   // than an answer standing in for one nobody has asked for yet.
   const generation = issueGeneration();
 
-  const request = invoke<IssueAsset>("fetch_issue_asset", { url })
+  const request = call<IssueAsset>("fetch_issue_asset", { url })
     .catch(() => null)
     .then((asset) => {
       cache.set(url, { generation, asset });

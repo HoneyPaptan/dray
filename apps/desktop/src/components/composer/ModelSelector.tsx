@@ -30,7 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 import { offersFast } from "@/lib/fastMode";
 import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId } from "@/types/events";
@@ -353,7 +353,7 @@ export default function ModelSelector({
     latestProvider.current = id;
     switchQueue.current = switchQueue.current
       .catch(() => {})
-      .then(() => invoke("set_fx_provider", { provider: id }))
+      .then(() => call("set_fx_provider", { provider: id }))
       .then(
         () => {
           if (latestProvider.current === id) onReloadModels?.();

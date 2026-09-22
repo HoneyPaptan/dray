@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { invoke } from "@tauri-apps/api/core";
+import { call } from "@/lib/transport";
 
 import { startSurveys } from "@/lib/surveys";
 import type { SettingsView } from "@/types/events";
@@ -21,7 +21,7 @@ export function useAppSettings(active: boolean) {
     if (!active || settings) return;
 
     let live = true;
-    invoke<SettingsView>("get_settings")
+    call<SettingsView>("get_settings")
       .then((next) => {
         if (live) setSettings(next);
       })
@@ -39,7 +39,7 @@ export function useAppSettings(active: boolean) {
   /// write therefore leaves the switch where it was, which is the truth.
   const setAnalyticsEnabled = useCallback(async (enabled: boolean) => {
     try {
-      setSettings(await invoke<SettingsView>("set_analytics_enabled", { enabled }));
+      setSettings(await call<SettingsView>("set_analytics_enabled", { enabled }));
       // After the write, never before it, and unconditionally: the SDK reads
       // consent back from Rust for itself, so this only has to say that the
       // answer may have moved. Awaiting the write first is what makes the
