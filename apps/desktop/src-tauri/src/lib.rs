@@ -42,6 +42,7 @@ pub mod notifications;
 pub mod orchestration;
 pub mod projects;
 pub mod quit;
+pub mod serve;
 pub mod session;
 pub mod settings;
 pub mod store;
@@ -373,6 +374,22 @@ fn track_active_day() {
     analytics::active_day();
 }
 
+/// Hand a remote client the answer to a command it asked for.
+///
+/// The desktop webview is what actually runs a phone's command — Tauri can
+/// dispatch a registered command by name only from a webview — so this is the
+/// return leg of that relay. `token` is the server's own handle for the waiting
+/// caller, never a session or a request id.
+#[tauri::command]
+fn remote_reply(
+    server: tauri::State<'_, std::sync::Arc<serve::RemoteServer>>,
+    token: u64,
+    ok: bool,
+    value: serde_json::Value,
+) {
+    server.reply(token, ok, value);
+}
+
 async fn settings_view() -> settings::SettingsView {
     settings::SettingsView {
         analytics_enabled: analytics::enabled().await,
@@ -640,6 +657,7 @@ pub fn run() {
         .manage(updater::PendingUpdate::default())
         .manage(quit::PendingQuit::default())
         .manage(transcription::TranscriptionState::default())
+        .manage(std::sync::Arc::new(serve::RemoteServer::default()))
         .on_menu_event(|app, event| {
             if event.id() == quit::QUIT_ID {
                 quit::request(app);
@@ -697,6 +715,10 @@ pub fn run() {
             // without switching apps would go uncounted. Free to state beside
             // the other two sites — all three claim one daily key.
             analytics::active_day();
+
+            // The phone's way in. Same bargain as orchestration above: a port
+            // that will not bind costs this feature and nothing else.
+            serve::serve(app.handle().clone());
 
             Ok(())
         })
@@ -792,6 +814,7 @@ pub fn run() {
             transcription::stop_transcription,
             transcription::retry_transcription,
             transcription::cancel_transcription,
+            remote_reply,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
