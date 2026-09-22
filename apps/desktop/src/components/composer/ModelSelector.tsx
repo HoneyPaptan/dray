@@ -61,6 +61,9 @@ const AGENT_LABELS: Record<Harness, string> = {
   // one of these models is also served by — the installer calls this one Grok
   // Build and the picker is naming an agent, not a model.
   grok: "Grok",
+  // Lowercase, which is how the project writes its own name everywhere its CLI
+  // prints it.
+  opencode: "opencode",
 };
 const AGENTS = HARNESS_ORDER.map((id) => ({ id, label: AGENT_LABELS[id] }));
 
@@ -271,6 +274,7 @@ export default function ModelSelector({
   onSeedProvider,
   loadingModels = false,
   usage = null,
+  cwd = null,
 }: {
   harness: Harness;
   onHarnessChange: (harness: Harness) => void;
@@ -599,13 +603,13 @@ export default function ModelSelector({
         // that one harness for no reason a reader could see. Rows truncate.
         //
         // **The agent track is what sets the number, not the rows.** It is the
-        // one thing here that cannot truncate: five marks at `size-6` are 120px
+        // one thing here that cannot truncate: six marks at `size-6` are 144px
         // before the ⌘/Shift/A caps beside them, and at 200px the chord's last
         // cap was clipped by the menu's edge. 8 (menu `p-1`) + 8 (track `p-1`)
-        // + 120 + 4 (`gap-1`) + 86 (three caps at `gap-1`, "Shift" spelled out)
-        // = 226. A sixth agent costs another 24 and wants this raised again —
+        // + 144 + 4 (`gap-1`) + 86 (three caps at `gap-1`, "Shift" spelled out)
+        // = 250. A seventh agent costs another 24 and wants this raised again —
         // or the hint dropped, which is what the fx arm below already does.
-        className="w-[232px]"
+        className="w-[256px]"
         // The trigger is also the tooltip trigger, so Radix returning focus to
         // it on close reopens the tooltip on that focus and leaves it stuck
         // until the next click. Don't refocus the trigger — the composer takes

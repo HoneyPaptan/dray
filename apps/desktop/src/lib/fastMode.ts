@@ -28,6 +28,9 @@ export const FAST_MODE_BY_HARNESS: Record<Harness, FastModeSupport> = {
   // child. The twin is hidden from the picker, or the same model would be
   // offered twice, once as a row and once as a mode.
   grok: "in-place",
+  // Nothing names one: no flag on `opencode acp`, no key in its config, and a
+  // session's options are model and mode alone.
+  opencode: "none",
 };
 
 /// Whether a harness's fast mode stands even with no model picked.

@@ -130,8 +130,19 @@ async fn scratch_dir() -> Result<std::path::PathBuf> {
 /// A suffix because that is where `with_preamble` puts them, and the ordering
 /// is measured rather than incidental — see that function.
 fn strip_dray_rules(prompt: &str) -> String {
-    let block = crate::harness::fx::preamble_block();
-    prompt.strip_suffix(&block).unwrap_or(prompt).to_string()
+    // Both blocks, because both harnesses append one and the two are built from
+    // their own copies of the text — identical today, and a suffix match
+    // against the wrong one silently strips nothing the day either moves.
+    let blocks = [
+        crate::harness::fx::preamble_block(),
+        crate::harness::opencode::preamble_block(),
+    ];
+
+    blocks
+        .iter()
+        .find_map(|block| prompt.strip_suffix(block.as_str()))
+        .unwrap_or(prompt)
+        .to_string()
 }
 
 /// The instructions and the text to title, as the one prompt argument both
@@ -290,6 +301,15 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         // second child to write a title grok has already written would be one
         // model call for an answer that is on the wire.
         Harness::Grok => bail!("grok titles its own sessions on the wire"),
+        // **A gap, and a cheap one to close.** opencode publishes no title over
+        // ACP — no `session_info_update` reaches a captured turn — so the
+        // prompt-derived title stands, which is what its own TUI shows too.
+        // What is missing is a child to write a better one: `opencode run`
+        // takes `--model` and would do it on one of the free models its zen
+        // provider lists, but it has no `--no-save`, so every title would leave
+        // a session behind in the reader's own `opencode session list`. Worth
+        // paying once that can be avoided, and not before.
+        Harness::Opencode => bail!("opencode has no title child that does not persist a session"),
         Harness::Fx => {
             let bin = crate::binpath::fx().await;
             let mut cmd = Command::new(&bin);

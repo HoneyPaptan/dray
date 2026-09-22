@@ -749,7 +749,7 @@ unreadable: Unreadable | null, };
  *
  * [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
  */
-export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok";
+export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok" | "opencode";
 
 export type HookPhase = "started" | "finished";
 
@@ -1218,6 +1218,26 @@ behavior: PermissionBehavior, };
  * than shown as a button whose effect can't be described.
  */
 export type PermissionOptionKind = "once" | "always_rule" | "always_directory" | "switch_mode" | "deny";
+
+/**
+ * One plan window, exactly as the CLI named it.
+ */
+export type PlanWindow = { 
+/**
+ * `Current session`, `Current week (all models)`, `Current week (Fable)`.
+ * The CLI's word, drawn as written — which is what lets a window this
+ * build has never heard of still draw correctly.
+ */
+label: string, 
+/**
+ * Whole percent spent, `33` at 33%.
+ */
+usedPercent: number, 
+/**
+ * `Sep 28, 4:30am (Asia/Kolkata)` — already formatted, already in the
+ * reader's timezone, so nothing here parses or reformats it.
+ */
+resets: string | null, };
 
 export type PrCheck = { name: string, state: CheckState, 
 /**

@@ -310,6 +310,11 @@ pub fn providers_of(harness: Harness) -> Vec<ProviderChoice> {
     };
 
     match harness {
+        // opencode publishes no provider list a build could name — the store
+        // holds whatever the reader has logged into and the CLI's own list is
+        // drawn, not printed — so the sign-in form asks for none and
+        // `opencode auth login` does the choosing in the terminal.
+        Harness::Opencode => Vec::new(),
         Harness::Fx => FX_PROVIDERS
             .iter()
             .map(|(arg, _, label)| choice(arg, label))
@@ -434,6 +439,15 @@ pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption>
                 Some("For a machine with no browser. Finish the sign-in elsewhere."),
             ),
         ],
+        // One flow, and the provider is picked inside it: `opencode providers
+        // login` opens its own chooser, so there is nothing for Dray to ask
+        // first and no key field to draw.
+        Harness::Opencode => vec![option(
+            "login",
+            "opencode account or provider key",
+            Some("opencode providers login"),
+            Some("Pick the provider in the terminal."),
+        )],
         Harness::Other(_) => Vec::new(),
     }
 }
@@ -445,6 +459,7 @@ async fn probe(harness: Harness, cwd: &str) -> anyhow::Result<Vec<Account>> {
         Harness::Pi => pi(cwd).await,
         Harness::Fx => fx(cwd).await,
         Harness::Grok => grok().await,
+        Harness::Opencode => opencode().await,
         // Nothing to ask: this build cannot name the CLI, let alone drive it.
         Harness::Other(_) => Ok(Vec::new()),
     }
@@ -1184,6 +1199,78 @@ async fn grok() -> anyhow::Result<Vec<Account>> {
     }])
 }
 
+/// One row per provider opencode holds a credential for.
+///
+/// Read off its own store rather than out of `opencode providers list`, which
+/// draws a box with rules and colour in it — a shape written for a person, and
+/// one that says nothing the file does not. The file is pi's arrangement too:
+/// a map of provider to credential, and only the *keys* and each entry's `type`
+/// are ever read here.
+///
+/// A reader with no credential still gets one row. opencode's own zen provider
+/// serves models without a login — which is how a session can run at all with
+/// an empty store — so the honest row is "signed out" rather than no row, and
+/// what it offers is the login that widens the model list.
+async fn opencode() -> anyhow::Result<Vec<Account>> {
+    let path = std::env::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home directory to look for opencode's auth in"))?
+        .join(".local/share/opencode/auth.json");
+
+    let raw = tokio::fs::read_to_string(&path).await;
+    // An unreadable file is **not** signed out, grok's reading next door: it may
+    // be perfectly good and merely unreachable for a moment, and a row claiming
+    // otherwise sends the reader to replace a credential that works.
+    let store: HashMap<String, OpencodeCredential> = match raw {
+        Ok(raw) => serde_json::from_str(&raw)
+            .map_err(|err| anyhow::anyhow!("couldn't read opencode's credential file: {err}"))?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    if store.is_empty() {
+        return Ok(vec![Account {
+            provider: None,
+            label: "opencode".to_string(),
+            state: AccountState::LoggedOut,
+            detail: None,
+            auth_type: None,
+            can_sign_out: false,
+            can_change_method: false,
+        }]);
+    }
+
+    let mut rows: Vec<Account> = store
+        .into_iter()
+        .map(|(provider, credential)| Account {
+            label: provider.clone(),
+            provider: Some(provider),
+            state: AccountState::LoggedIn,
+            detail: None,
+            auth_type: Some(match credential.kind.as_deref() {
+                Some("api") => "API key".to_string(),
+                Some("oauth") => "OAuth".to_string(),
+                Some(other) => other.to_string(),
+                None => "Credential".to_string(),
+            }),
+            can_sign_out: true,
+            can_change_method: false,
+        })
+        .collect();
+
+    // A map has no order of its own, and a row list that reshuffles between
+    // reads is one the reader cannot scan.
+    rows.sort_by(|a, b| a.label.cmp(&b.label));
+    Ok(rows)
+}
+
+/// opencode's stored credential. `type` is all that is read — the secret beside
+/// it is never touched.
+#[derive(serde::Deserialize)]
+struct OpencodeCredential {
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+}
+
 /// Signs one credential out, where the CLI can do it without a terminal.
 ///
 /// Three of the four can: `claude auth logout` and `codex logout` drop the one
@@ -1198,6 +1285,13 @@ pub async fn sign_out(harness: Harness, provider: Option<String>) -> Result<(), 
         Harness::ClaudeCode => vec!["auth", "logout"],
         Harness::Codex => vec!["logout"],
         Harness::Grok => vec!["logout"],
+        // `opencode providers logout <provider>`, and the provider is the store
+        // key the row was built from — so a row can only ever sign out the
+        // credential it names.
+        Harness::Opencode => {
+            let provider = provider.as_deref().ok_or("Which provider?")?;
+            vec!["providers", "logout", provider]
+        }
         Harness::Fx => {
             let provider = provider.as_deref().ok_or("Which provider?")?;
             if !login_provider(harness, provider) {

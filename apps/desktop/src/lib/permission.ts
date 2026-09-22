@@ -35,6 +35,12 @@ const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
   // that it enters by asking (`_x.ai/exit_plan_mode` raises the card), which is
   // the model's decision rather than a stance the composer can set it to.
   grok: ["manual", "auto", "bypassPermissions"],
+  // Two, which is opencode's whole session-mode list: `plan` and `build`.
+  // `manual` is deliberately not among them — what a session asks permission
+  // for is the `permission` block in the reader's own opencode config, and ACP
+  // exposes no per-session surface for it, so claiming `manual` here would
+  // promise a gate Dray cannot set.
+  opencode: ["plan", "auto"],
 };
 
 /// The stance a harness actually runs when handed one it does not honour.
@@ -50,6 +56,11 @@ const FALLBACK: Partial<Record<Harness, (mode: ApprovalPolicy) => ApprovalPolicy
   // session inherits its parent's stance, so a `plan` parent landing on
   // `bypassPermissions` would come out ungated by inheriting a narrower one.
   grok: (mode) => (mode === "plan" ? "manual" : "bypassPermissions"),
+  // Everything that is not read-only is `build`, which Dray records as `auto`.
+  // Unlike the two above there is no narrower stance to fall to: opencode has
+  // exactly two modes, so a `manual` parent's child runs as `build` and the
+  // composer says so rather than drawing a gate that does nothing.
+  opencode: () => "auto",
 };
 
 /// Whether this harness honours this stance.

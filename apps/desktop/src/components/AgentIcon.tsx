@@ -132,6 +132,8 @@ export default function AgentIcon({
       // component rather than two: it names xAI's model either way, and a
       // second copy is a second thing to redraw when the logo moves.
       return <GrokIcon className={className} />;
+    case "opencode":
+      return <OpencodeIcon className={className} />;
     default:
       return <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />;
   }
@@ -172,6 +174,32 @@ function GrokIcon({ className }: { className?: string }) {
 }
 
 /// The mark for one of fx's providers, keyed by the id in `FX_PROVIDERS`.
+/// A terminal square, and **deliberately not opencode's own wordmark**.
+///
+/// Every other mark here is the vendor's, traced from a logo they publish. A
+/// hand-drawn approximation of one would be a claim to be their logo that a
+/// glyph plainly is not — so this is a generic mark that says "terminal agent"
+/// honestly, and it is what to replace the day their real one is traced.
+function OpencodeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={cn("size-4 shrink-0", className)}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label="opencode"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M7 9l3 3-3 3" />
+      <path d="M13 15h4" />
+    </svg>
+  );
+}
+
 /// Codex's is OpenAI's — one vendor, one mark, whichever side of the menu
 /// names it.
 export function ProviderIcon({

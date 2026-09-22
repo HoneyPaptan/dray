@@ -1,0 +1,49 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "sessionId": "ses_f34e47c9bffebt9ifygv8Y75GL",
+    "configOptions": [
+      {
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": "opencode/big-pickle",
+        "options": [
+          {
+            "value": "openrouter/aion-labs/aion-2.0",
+            "name": "OpenRouter/Aion-2.0"
+          },
+          {
+            "value": "openrouter/aion-labs/aion-3.0",
+            "name": "OpenRouter/Aion-3.0"
+          },
+          {
+            "value": "openrouter/aion-labs/aion-3.0-mini",
+            "name": "OpenRouter/Aion-3.0-Mini"
+          }
+        ]
+      },
+      {
+        "id": "mode",
+        "name": "Session Mode",
+        "category": "mode",
+        "type": "select",
+        "currentValue": "build",
+        "options": [
+          {
+            "value": "build",
+            "name": "build",
+            "description": "The default agent. Executes tools based on configured permissions."
+          },
+          {
+            "value": "plan",
+            "name": "plan",
+            "description": "Plan mode. Disallows all edit tools."
+          }
+        ]
+      }
+    ]
+  }
+}

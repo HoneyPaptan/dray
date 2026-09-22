@@ -18,6 +18,9 @@ pub mod fx;
 #[path = "grok/grok.rs"]
 pub mod grok;
 
+#[path = "opencode/opencode.rs"]
+pub mod opencode;
+
 pub mod rpc;
 
 use serde::{Deserialize, Serialize};
@@ -468,6 +471,7 @@ pub enum Harness {
     Pi,
     Fx,
     Grok,
+    Opencode,
     /// A harness some other build named and this one has never heard of, with
     /// its spelling kept so a round trip does not lose it.
     ///
@@ -522,12 +526,13 @@ impl Harness {
     /// [`Harness::Other`] is deliberately absent: it is a value read off disk,
     /// never one to pick, so a picker or an availability read built from this
     /// cannot offer it.
-    pub const ALL: [Harness; 5] = [
+    pub const ALL: [Harness; 6] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::Pi,
         Harness::Fx,
         Harness::Grok,
+        Harness::Opencode,
     ];
 
     /// How the wire spells it — what `dray new --harness` takes and what an
@@ -548,6 +553,7 @@ impl Harness {
             Harness::Pi => "pi".to_string(),
             Harness::Fx => "fx".to_string(),
             Harness::Grok => "grok".to_string(),
+            Harness::Opencode => "opencode".to_string(),
             Harness::Other(name) => name.to_string(),
         }
     }
@@ -785,6 +791,27 @@ impl Harness {
                 forkable: false,
                 fork_needs_cli: false,
             },
+            // fx's upstream, and the same ACP surface with two of fx's three
+            // in-place settings and none of its fourth. Model and stance are
+            // `session/set_config_option` — `model` and `mode`, which is the
+            // whole option list a session publishes — and there is **no effort
+            // level anywhere** to apply in place or otherwise, so that flag is
+            // false for the reason no other harness's is: not "a respawn moves
+            // it" but "there is nothing to move".
+            //
+            // Not forkable in v1. `session/fork` is advertised and answers with
+            // a new session id, so the wire is ready; what it needs is a child
+            // to make the call on, which no fork path here arranges yet.
+            Harness::Opencode => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: true,
+                applies_effort_in_place: false,
+                applies_permission_in_place: true,
+                fast_mode: FastMode::Unsupported,
+                expands_at_mentions: false,
+                forkable: false,
+                fork_needs_cli: false,
+            },
             // A session some other build wrote and this one cannot run. `false`
             // throughout: the row still draws, so the reader can see the session
             // is there and read its transcript, and `names_a_cli` is what stops
@@ -812,6 +839,7 @@ impl Harness {
             // xAI's own name for the product, which is what its docs and its
             // installer call it — `grok` alone is the chat assistant.
             Harness::Grok => "Grok Build",
+            Harness::Opencode => "opencode",
             // Its own spelling, the only thing known about it — and the honest
             // thing to put in a sentence, since the name a newer build wrote is
             // the one its reader will recognise.
@@ -842,6 +870,7 @@ impl Harness {
             // Vercel's own installer, off fx.sh/docs/getting-started/installation.
             Harness::Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
             Harness::Grok => "curl -fsSL https://x.ai/cli/install.sh | sh",
+            Harness::Opencode => "curl -fsSL https://opencode.ai/install | bash",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
@@ -860,6 +889,7 @@ impl Harness {
             Harness::Pi => "https://pi.dev/docs/latest",
             Harness::Fx => "https://fx.sh/docs/getting-started/installation",
             Harness::Grok => "https://docs.x.ai/build/quickstart",
+            Harness::Opencode => "https://opencode.ai/docs/",
             // Empty, so the notice draws no link rather than a wrong one: the
             // cure here is a newer Dray, not a CLI to install.
             Harness::Other(_) => "",
@@ -890,6 +920,7 @@ impl Harness {
             // A browser flow against `auth.x.ai`, or `--device-auth` where
             // there is no browser to open. The plain form is the one to name.
             Harness::Grok => "grok login",
+            Harness::Opencode => "opencode providers login",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -910,6 +941,7 @@ impl Harness {
             Harness::Pi => &[],
             Harness::Fx => &["login"],
             Harness::Grok => &["login"],
+            Harness::Opencode => &["providers", "login"],
             Harness::Other(_) => &[],
         }
     }
@@ -933,7 +965,11 @@ impl Harness {
             // Per provider too, and the command asks which. A working Codex
             // login says nothing about fx: it keeps its own store.
             Harness::Fx => Some("and pick the provider it asks for"),
-            Harness::ClaudeCode | Harness::Codex | Harness::Grok | Harness::Other(_) => None,
+            Harness::ClaudeCode
+            | Harness::Codex
+            | Harness::Grok
+            | Harness::Opencode
+            | Harness::Other(_) => None,
         }
     }
 }

@@ -276,6 +276,11 @@ async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
         harness::Harness::Fx => harness::fx::models::list().await,
         harness::Harness::Grok => harness::grok::models::list().await,
         harness::Harness::Codex => harness::codex::models::list().await,
+        // opencode's is `opencode models`, which is every model its reader's
+        // providers serve — 388 on the machine this was written against — so
+        // the picker shows their starred shortlist and the library dialog the
+        // rest. See `harness/opencode/models.rs`.
+        harness::Harness::Opencode => harness::opencode::models::list().await,
         other => models::models_for(other),
     }
 }
@@ -295,6 +300,9 @@ async fn refresh_models() {
     // asks again.
     harness::grok::models::forget();
     harness::codex::models::forget();
+    // opencode's is one `opencode models` away, and a reader refreshing has
+    // just logged a provider in — which is exactly what changes that list.
+    harness::opencode::models::forget();
 }
 
 /// Switches fx's active provider, which is what its model list is drawn from.

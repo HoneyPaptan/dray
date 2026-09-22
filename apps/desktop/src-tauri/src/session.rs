@@ -471,6 +471,10 @@ impl SessionManager {
             // Codex's list is the machine's answer too now, with the table
             // behind it — so a model shipped after this build still spawns.
             Harness::Codex => crate::harness::codex::models::find(&model).await,
+            // opencode's list is the machine's answer as well: which models
+            // exist depends on the reader's own providers, so nothing written
+            // here could name them.
+            Harness::Opencode => crate::harness::opencode::models::find(&model).await,
             _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
         };
 
@@ -1540,6 +1544,10 @@ pub enum Transport {
     /// chose — grok honours `_meta.sessionId`, so there is no minted id to
     /// carry. See [`GrokSession`](crate::harness::grok::GrokSession).
     Grok(crate::harness::grok::GrokSession),
+    /// opencode's connection: ACP like fx's, and addressed the same way — the
+    /// id is opencode's own, minted at `session/new`. See
+    /// [`OpencodeSession`](crate::harness::opencode::OpencodeSession).
+    Opencode(crate::harness::opencode::OpencodeSession),
 }
 
 impl Transport {
@@ -1559,7 +1567,10 @@ impl Transport {
     /// a batch over at, seconds away, which is why this is a question about the
     /// transport rather than a flag on the session.
     pub fn one_prompt_per_turn(&self) -> bool {
-        matches!(self, Transport::Fx(_) | Transport::Grok(_))
+        matches!(
+            self,
+            Transport::Fx(_) | Transport::Grok(_) | Transport::Opencode(_)
+        )
     }
 
     /// Opens a turn with one prompt, for the transports that take it as a
@@ -1572,6 +1583,9 @@ impl Transport {
         match self {
             Transport::Fx(session) => Some(crate::harness::fx::start_turn(session, text).await),
             Transport::Grok(session) => Some(crate::harness::grok::start_turn(session, text).await),
+            Transport::Opencode(session) => {
+                Some(crate::harness::opencode::start_turn(session, text).await)
+            }
             _ => None,
         }
     }
@@ -1585,7 +1599,11 @@ impl Transport {
     pub fn lines(&self) -> Result<&Arc<Mutex<ChildStdin>>> {
         match self {
             Transport::Lines(stdin) => Ok(stdin),
-            Transport::Rpc(_) | Transport::Pi(_) | Transport::Fx(_) | Transport::Grok(_) => {
+            Transport::Rpc(_)
+            | Transport::Pi(_)
+            | Transport::Fx(_)
+            | Transport::Grok(_)
+            | Transport::Opencode(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -1740,6 +1758,30 @@ impl Session {
                     effort,
                     permission_mode,
                     fast,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    app,
+                )
+                .await
+            }
+            Harness::Opencode => {
+                // The same two refusals fx and pi take, and the second is the
+                // only one that is a *choice*: Dray makes the tree because
+                // `opencode acp` has no `-w`, and its `session/fork` is real
+                // but needs a child to make the call on, which no fork path
+                // here arranges yet.
+                if worktree_name.is_some() {
+                    bail!("opencode cannot create a worktree — it has to be made first");
+                }
+                if fork_from.is_some() {
+                    bail!("opencode sessions cannot be forked yet");
+                }
+
+                crate::harness::opencode::init(
+                    session_id,
+                    model,
+                    permission_mode,
                     cwd,
                     session_cwd,
                     is_new_session,
@@ -1994,6 +2036,18 @@ impl Session {
             return Ok(());
         }
 
+        // opencode's is the same config write, and its reply restates the
+        // session's whole option list — so what lands on this struct is what
+        // opencode says it is running rather than what was asked for, the
+        // lesson fx's provider half above is written from. There is no ladder
+        // to tell the picker about, so no `app` is needed.
+        if let Transport::Opencode(session) = &self.stdin {
+            let config = crate::harness::opencode::set_model(session, model).await?;
+            self.model = crate::harness::opencode::landed_model(&config)
+                .unwrap_or_else(|| model.id.clone());
+            return Ok(());
+        }
+
         // grok's is the same request without fx's provider half — one vendor,
         // so there is nothing for a model to belong to but grok.
         if let Transport::Grok(session) = &self.stdin {
@@ -2108,6 +2162,11 @@ impl Session {
             return crate::harness::grok::cancel(session);
         }
 
+        // opencode's, likewise.
+        if let Transport::Opencode(session) = &self.stdin {
+            return crate::harness::opencode::cancel(session);
+        }
+
         // pi never reaches here: its Stop goes through
         // [`pi::desk`](crate::harness::pi::desk), which is registered for the
         // life of the reader. Arriving means the desk has gone and the child
@@ -2155,6 +2214,16 @@ impl Session {
     pub async fn set_permission_mode(&mut self, mode: ApprovalPolicy) -> Result<()> {
         if let Transport::Fx(session) = &self.stdin {
             crate::harness::fx::set_mode(session, mode).await?;
+            self.permission_mode = mode;
+            return Ok(());
+        }
+
+        // opencode's stance is a config option like its model, and its two
+        // modes are `build` and `plan` — see
+        // [`mode_for`](crate::harness::opencode::mode_for) for what that can
+        // and cannot honour.
+        if let Transport::Opencode(session) = &self.stdin {
+            crate::harness::opencode::set_mode(session, mode).await?;
             self.permission_mode = mode;
             return Ok(());
         }
@@ -2220,6 +2289,14 @@ impl Session {
             // fx's decision is the whole ACP outcome envelope, built by the
             // button, so it goes back as the result itself.
             (Transport::Fx(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(*rpc_id, outcome)?;
+            }
+            // opencode's is fx's envelope, built by the button the same way.
+            (Transport::Opencode(session), Reply::Rpc(rpc_id)) => {
                 let outcome = chosen
                     .decision
                     .clone()
@@ -2376,6 +2453,13 @@ impl Session {
         // its summary on close, so it is asked to leave rather than killed.
         if let Transport::Grok(session) = &self.stdin {
             crate::harness::grok::shutdown(&mut self.child, session).await;
+            return Ok(());
+        }
+
+        // opencode persists every ACP session it opens, prompted or not, so it
+        // is asked to close rather than killed mid-write.
+        if let Transport::Opencode(session) = &self.stdin {
+            crate::harness::opencode::shutdown(&mut self.child, session).await;
             return Ok(());
         }
 

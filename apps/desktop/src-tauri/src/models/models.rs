@@ -149,7 +149,10 @@ pub fn default_model_for(harness: Harness) -> Option<ModelId> {
         Harness::Codex => Some(ModelId::new("gpt56_sol")),
         // Multi-provider, both of them, so any constant here might name a model
         // the reader has no key for. Their own settings already say.
-        Harness::Pi | Harness::Fx => None,
+        // opencode joins them: 388 models on the probe machine, spread across
+        // every provider its reader has logged into, so a constant could only
+        // name one they may not have.
+        Harness::Pi | Harness::Fx | Harness::Opencode => None,
         // Single-vendor, unlike the two above, so a constant here names a model
         // every signed-in reader has. The list is still a probe — xAI ships
         // models faster than Dray does — and `grok::models::default_model`
@@ -389,7 +392,7 @@ pub fn models_for(harness: Harness) -> Vec<Model> {
     match harness {
         Harness::ClaudeCode => claude_models(),
         Harness::Codex => codex_models(),
-        Harness::Pi | Harness::Fx | Harness::Grok => Vec::new(),
+        Harness::Pi | Harness::Fx | Harness::Grok | Harness::Opencode => Vec::new(),
         // Empty rather than a guess: this build cannot say what that harness
         // runs, and offering Claude's list would let a picker set a model the
         // session's own agent has never heard of.
@@ -417,7 +420,7 @@ pub fn runs_on(id: &ModelId, harness: Harness) -> bool {
     match harness {
         Harness::ClaudeCode => claude_models().iter().any(|m| &m.id == id),
         Harness::Codex => every_codex_model().iter().any(|m| &m.id == id),
-        Harness::Pi | Harness::Fx | Harness::Grok => find_model(id).is_none(),
+        Harness::Pi | Harness::Fx | Harness::Grok | Harness::Opencode => find_model(id).is_none(),
         // Nothing runs on a harness this build cannot spawn, and `false` is
         // the safe direction: it refuses a model rather than recording one
         // against a session that could never use it.

@@ -207,6 +207,16 @@ pub async fn grok() -> PathBuf {
     cached(&GROK_PATH, or_bare("grok")).await
 }
 
+static OPENCODE_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Where `opencode` is, or the bare name as a last resort — [`claude`]'s shape.
+/// Its installer puts it in `~/.opencode/bin` and distributions package it into
+/// `/usr/bin`, so an inherited `PATH` usually answers before the known-dirs
+/// pass is needed.
+pub async fn opencode() -> PathBuf {
+    cached(&OPENCODE_PATH, or_bare("opencode")).await
+}
+
 #[cfg(test)]
 mod pi_resolution_tests {
     /// Prints what the resolver found rather than asserting about this machine,
@@ -268,6 +278,7 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
         Harness::Pi => pi().await,
         Harness::Fx => fx().await,
         Harness::Grok => grok().await,
+        Harness::Opencode => opencode().await,
         // A harness only some other build knows. Its own spelling, which is
         // relative and so reads as "not installed" — the refusal has to happen
         // here rather than by falling back to Claude Code, which would run the
