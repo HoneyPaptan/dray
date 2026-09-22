@@ -222,6 +222,20 @@ const LINE_URLS: Record<string, (path: string, line: number) => string> = {
   "Zed Preview.app": (p, l) => `zed-preview://file${p}:${l}`,
   "MacVim.app": (p, l) => `mvim://open?url=file://${p}&line=${l}`,
   "BBEdit.app": (p, l) => `x-bbedit://open?url=file://${p}&line=${l}`,
+  // The same editors again, keyed the way the XDG half addresses them: an entry
+  // there is a `.desktop` file, so the last path segment this matches on is
+  // `code.desktop` rather than `Visual Studio Code.app`. Without a row here the
+  // file still opens — `gio launch` hands the path over — and lands at line 1,
+  // which is the failure this table exists to avoid and the one it fails to
+  // silently.
+  "code.desktop": (p, l) => `vscode://file${p}:${l}`,
+  "visual-studio-code.desktop": (p, l) => `vscode://file${p}:${l}`,
+  "code-insiders.desktop": (p, l) => `vscode-insiders://file${p}:${l}`,
+  "codium.desktop": (p, l) => `vscodium://file${p}:${l}`,
+  "cursor.desktop": (p, l) => `cursor://file${p}:${l}`,
+  "windsurf.desktop": (p, l) => `windsurf://file${p}:${l}`,
+  "dev.zed.Zed.desktop": (p, l) => `zed://file${p}:${l}`,
+  "zed.desktop": (p, l) => `zed://file${p}:${l}`,
 };
 
 /// The URL that opens `path` at `line` in `app`, or `null` where there is no

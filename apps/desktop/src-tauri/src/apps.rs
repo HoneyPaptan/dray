@@ -1,9 +1,11 @@
 //! Which apps on this machine can open a path — a session's working directory
 //! from the right panel's split button, or one file from a transcript row.
 //!
-//! Everything here is macOS-only and says so by returning an empty list
-//! elsewhere: `open(1)`, `.app` bundles and `.icns` are all one platform's,
-//! and no other build has a window to draw the button in yet.
+//! Two machines answer this, and the split is by *machine* rather than by
+//! compiler: `open(1)`, `.app` bundles and `.icns` are one platform's, and
+//! `.desktop` entries, `gio` and `xdg-open` are the other's. Both halves
+//! compile everywhere and the call sites pick with `cfg!`, so neither can rot
+//! behind a `#[cfg]` nobody builds. Anything else answers an empty list.
 
 use std::{
     collections::HashMap,
@@ -281,12 +283,13 @@ fn detect() -> Vec<ExternalApp> {
 /// asks, instead of needing a restart the way the slash-command cache does.
 #[tauri::command]
 pub async fn list_open_apps() -> Vec<ExternalApp> {
-    if !cfg!(target_os = "macos") {
-        return Vec::new();
+    if cfg!(target_os = "macos") {
+        return tauri::async_runtime::spawn_blocking(detect).await.unwrap_or_default();
     }
-    tauri::async_runtime::spawn_blocking(detect)
-        .await
-        .unwrap_or_default()
+    if cfg!(target_os = "linux") {
+        return tauri::async_runtime::spawn_blocking(xdg::detect).await.unwrap_or_default();
+    }
+    Vec::new()
 }
 
 /// Hands `path` to the app at `app_path`.
@@ -298,6 +301,10 @@ pub async fn list_open_apps() -> Vec<ExternalApp> {
 /// parses as a flag, which `--` ends.
 #[tauri::command]
 pub async fn open_in_app(app_path: String, path: String) -> Result<(), String> {
+    if cfg!(target_os = "linux") {
+        return xdg::open_in_app(&app_path, &path).await;
+    }
+
     let out = tokio::process::Command::new("open")
         .arg("-a")
         .arg(&app_path)
@@ -349,10 +356,6 @@ const TERMINAL: &str = "/System/Applications/Utilities/Terminal.app";
 /// silent. A `.command` file needs no permission at all.
 #[tauri::command]
 pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("Opening a terminal is macOS only. Copy the command instead.".to_string());
-    }
-
     let binary = crate::binpath::agent_binary(harness).await;
     let mut command = sh_quote(&binary.to_string_lossy());
     for arg in harness.login_args() {
@@ -372,10 +375,6 @@ pub async fn open_login_terminal(harness: Harness, cwd: String) -> Result<(), St
 /// script, so the safety is in where it came from and not in any escaping this
 /// could do to it.
 pub(crate) async fn run_in_terminal(command: &str, cwd: &str) -> Result<(), String> {
-    if !cfg!(target_os = "macos") {
-        return Err("Opening a terminal is macOS only. Copy the command instead.".to_string());
-    }
-
     // Terminal runs a `.command` from the reader's home, not from the script's
     // own directory, so the `cd` is what puts the login in the session's tree.
     // Omitted where there is no directory to name — the Accounts tab is reached
@@ -389,9 +388,21 @@ pub(crate) async fn run_in_terminal(command: &str, cwd: &str) -> Result<(), Stri
     };
     let script = format!("#!/bin/sh\n{enter}{command}\nrm -f -- \"$0\"\n");
 
-    let path = std::env::temp_dir().join(format!("dray-login-{}.command", uuid::Uuid::now_v7()));
+    // `.command` is the extension Terminal.app *runs* a file by rather than
+    // opening it in an editor. Nothing on Linux reads it, where `.sh` is what
+    // somebody finding one of these in a temp dir would expect.
+    let suffix = if cfg!(target_os = "macos") { "command" } else { "sh" };
+    let path = std::env::temp_dir().join(format!("dray-login-{}.{suffix}", uuid::Uuid::now_v7()));
     write_script(&path, &script)
         .map_err(|err| format!("could not write the login script: {err}"))?;
+
+    if cfg!(target_os = "linux") {
+        // Cleaned up only where nothing was started. A terminal that did open
+        // runs the script, which deletes itself on the way out.
+        return xdg::run_in_terminal(&path).await.inspect_err(|_| {
+            let _ = std::fs::remove_file(&path);
+        });
+    }
 
     let out = tokio::process::Command::new("open")
         .arg("-a")
@@ -456,6 +467,263 @@ fn write_script(path: &Path, body: &str) -> std::io::Result<()> {
 /// outside them.
 fn sh_quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+/// The XDG half: `.desktop` entries, `gio launch`, and the terminals Linux has
+/// instead of `open -a`.
+///
+/// Compiled on every platform and reached through `cfg!` at the call sites, the
+/// same bargain the macOS half takes. Nothing in here needs the compiler to know
+/// which machine it is on — a mac simply has none of these directories and this
+/// answers an empty list there.
+mod xdg {
+    use std::{collections::HashMap, path::PathBuf};
+
+    use super::{ExternalApp, ExternalAppKind};
+
+    /// One row: the desktop entry's id — its file name without `.desktop` —
+    /// what to call it, and which run of the menu it belongs to.
+    struct Known {
+        id: &'static str,
+        name: &'static str,
+        kind: ExternalAppKind,
+    }
+
+    const fn editor(id: &'static str, name: &'static str) -> Known {
+        Known { id, name, kind: ExternalAppKind::Editor }
+    }
+
+    const fn terminal(id: &'static str, name: &'static str) -> Known {
+        Known { id, name, kind: ExternalAppKind::Terminal }
+    }
+
+    /// The entries this menu knows how to hand a path to, in the order drawn.
+    ///
+    /// Curated for the macOS table's reason, and with one difference that is
+    /// this platform's own: an app is packaged by several hands here, so one app
+    /// can answer to several ids — `Alacritty` from the tarball and `alacritty`
+    /// from the distribution, `dev.zed.Zed` and `zed`. Both spellings are listed
+    /// and [`detect`] keeps the first, since a machine carrying both would
+    /// otherwise draw the same app twice.
+    const KNOWN: &[Known] = &[
+        editor("code", "VS Code"),
+        editor("visual-studio-code", "VS Code"),
+        editor("code-insiders", "VS Code Insiders"),
+        editor("codium", "VSCodium"),
+        editor("cursor", "Cursor"),
+        editor("windsurf", "Windsurf"),
+        editor("dev.zed.Zed", "Zed"),
+        editor("zed", "Zed"),
+        editor("sublime_text", "Sublime Text"),
+        editor("jetbrains-idea", "IntelliJ IDEA"),
+        editor("jetbrains-idea-ce", "IntelliJ IDEA CE"),
+        editor("jetbrains-webstorm", "WebStorm"),
+        editor("jetbrains-pycharm", "PyCharm"),
+        editor("jetbrains-pycharm-ce", "PyCharm CE"),
+        editor("jetbrains-goland", "GoLand"),
+        editor("jetbrains-rustrover", "RustRover"),
+        editor("jetbrains-clion", "CLion"),
+        editor("jetbrains-phpstorm", "PhpStorm"),
+        editor("jetbrains-rubymine", "RubyMine"),
+        editor("jetbrains-datagrip", "DataGrip"),
+        editor("android-studio", "Android Studio"),
+        editor("nvim", "Neovim"),
+        editor("gvim", "Vim"),
+        editor("org.gnome.TextEditor", "Text Editor"),
+        terminal("com.mitchellh.ghostty", "Ghostty"),
+        terminal("ghostty", "Ghostty"),
+        terminal("kitty", "kitty"),
+        terminal("Alacritty", "Alacritty"),
+        terminal("alacritty", "Alacritty"),
+        terminal("org.wezfurlong.wezterm", "WezTerm"),
+        terminal("org.gnome.Console", "Console"),
+        terminal("org.gnome.Terminal", "Terminal"),
+        terminal("konsole", "Konsole"),
+        terminal("foot", "foot"),
+    ];
+
+    /// Finder's counterpart, and it is a *command* rather than an entry.
+    ///
+    /// Which app manages files is the reader's own association and `xdg-open`
+    /// already resolves it, so there is nothing to scan for and nothing to get
+    /// wrong when they change it. It doubles as this half's sentinel: it is not
+    /// a path, so [`open_in_app`] tells it from every other row by value.
+    pub const FILES: &str = "xdg-open";
+
+    /// Where a `.desktop` entry lives, in precedence order.
+    ///
+    /// The reader's own first, then flatpak's per-user exports, then whatever
+    /// `XDG_DATA_DIRS` names, then the system-wide flatpak and snap exports that
+    /// most distributions put on that variable and not all of them do.
+    fn desktop_dirs() -> Vec<PathBuf> {
+        let home = std::env::home_dir();
+        let mut dirs = Vec::new();
+
+        match std::env::var_os("XDG_DATA_HOME").filter(|home| !home.is_empty()) {
+            Some(data_home) => dirs.push(PathBuf::from(data_home).join("applications")),
+            None => {
+                if let Some(home) = &home {
+                    dirs.push(home.join(".local/share/applications"));
+                }
+            }
+        }
+        if let Some(home) = &home {
+            dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
+        }
+
+        let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_default();
+        let data_dirs = if data_dirs.is_empty() {
+            "/usr/local/share:/usr/share".to_string()
+        } else {
+            data_dirs
+        };
+        for dir in data_dirs.split(':').filter(|dir| !dir.is_empty()) {
+            dirs.push(PathBuf::from(dir).join("applications"));
+        }
+
+        dirs.push(PathBuf::from("/var/lib/flatpak/exports/share/applications"));
+        dirs.push(PathBuf::from("/var/lib/snapd/desktop/applications"));
+        dirs
+    }
+
+    /// Entry id to its path, for every `.desktop` file in `dirs`.
+    ///
+    /// `or_insert`, because the list above is in precedence order and an entry
+    /// the reader installed for themselves has to outrank the system's copy of
+    /// the same id — the macOS half's "first directory wins", said again.
+    fn installed(dirs: &[PathBuf]) -> HashMap<String, PathBuf> {
+        let mut found = HashMap::new();
+        for dir in dirs {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_none_or(|ext| ext != "desktop") {
+                    continue;
+                }
+                if let Some(id) = path.file_stem().and_then(|id| id.to_str()) {
+                    found.entry(id.to_string()).or_insert(path);
+                }
+            }
+        }
+        found
+    }
+
+    /// The apps that can open a path on this machine.
+    pub fn detect() -> Vec<ExternalApp> {
+        let installed = installed(&desktop_dirs());
+
+        let mut apps: Vec<ExternalApp> = Vec::new();
+        for known in KNOWN {
+            let Some(path) = installed.get(known.id) else {
+                continue;
+            };
+            if apps.iter().any(|app| app.name == known.name) {
+                continue;
+            }
+            apps.push(ExternalApp {
+                path: path.to_string_lossy().into_owned(),
+                name: known.name.to_string(),
+                kind: known.kind,
+                // An icon here is a name to look up in the reader's theme rather
+                // than a file beside the app, so reading one means walking that
+                // theme's inheritance and its sizes. The button already falls
+                // back to a glyph, and absent is the ordinary case on macOS too.
+                icon: None,
+            });
+        }
+
+        // Unconditional, where the macOS half checks Finder is really there:
+        // this row is a command every desktop has rather than an app that might
+        // not be installed.
+        apps.push(ExternalApp {
+            path: FILES.to_string(),
+            name: "File manager".to_string(),
+            kind: ExternalAppKind::Files,
+            icon: None,
+        });
+        apps
+    }
+
+    /// Hands `path` to the entry at `app_path`, or to the reader's own default.
+    pub async fn open_in_app(app_path: &str, path: &str) -> Result<(), String> {
+        let mut command = if app_path == FILES {
+            // Finder *reveals* a file. `xdg-open` has no such verb, and handed
+            // one it would open it in whatever app claims the type — which is
+            // the editor rows' job, not this one's. The containing directory is
+            // the closest honest answer, and it is what the button promises.
+            let target = std::path::Path::new(path);
+            let target = if target.is_file() { target.parent().unwrap_or(target) } else { target };
+            let mut command = tokio::process::Command::new("xdg-open");
+            command.arg(target);
+            command
+        } else {
+            // `gio launch` runs the entry's own `Exec` line with the path
+            // appended, which is what makes an editor's `%U` handling apply —
+            // including the `vscode://file/…:12` a transcript link carries a
+            // line number in. Naming the entry outright is the macOS half's rule
+            // as well: nothing here asks the desktop to rank a handler.
+            let mut command = tokio::process::Command::new("gio");
+            command.arg("launch").arg(app_path).arg(path);
+            command
+        };
+
+        let out = command
+            .output()
+            .await
+            .map_err(|err| format!("could not run the opener: {err}"))?;
+
+        if out.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("could not open {path}")
+        } else {
+            stderr
+        })
+    }
+
+    /// The terminals this can start, in the order tried, each with the argument
+    /// it takes a command by.
+    ///
+    /// A list rather than the terminal the reader picked in the panel, for the
+    /// macOS half's reason: that pick promises only that the app opens a
+    /// *directory*, and running a command in one is a different shape with a
+    /// different flag per terminal. There is no `x-terminal-emulator` on most of
+    /// these distributions, so the alternative is no terminal at all.
+    const TERMINALS: &[(&str, &[&str])] = &[
+        ("ghostty", &["-e"]),
+        ("kitty", &[]),
+        ("wezterm", &["start", "--"]),
+        ("alacritty", &["-e"]),
+        ("foot", &[]),
+        ("konsole", &["-e"]),
+        ("gnome-terminal", &["--"]),
+        ("xfce4-terminal", &["-x"]),
+        ("xterm", &["-e"]),
+    ];
+
+    /// Opens the first terminal that is installed, running `script`.
+    ///
+    /// Spawned rather than waited on: the window lives as long as the reader
+    /// wants it. A terminal that is simply not installed fails here at the
+    /// `exec`, which is what makes walking the list cheap — no `which`, no probe
+    /// — and the error kind is what tells that case from a real failure.
+    pub async fn run_in_terminal(script: &std::path::Path) -> Result<(), String> {
+        for (binary, args) in TERMINALS {
+            let mut command = tokio::process::Command::new(binary);
+            command.args(*args).arg(script);
+            match command.spawn() {
+                Ok(_) => return Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(format!("could not start {binary}: {err}")),
+            }
+        }
+        Err("No terminal found. Copy the command and run it yourself.".to_string())
+    }
 }
 
 #[cfg(test)]
