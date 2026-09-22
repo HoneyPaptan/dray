@@ -22,12 +22,16 @@ pub mod analytics;
 pub mod apps;
 pub mod attachments;
 pub mod binpath;
+#[path = "browser/browser.rs"]
+pub mod browser;
 #[cfg(all(feature = "cef", target_os = "macos"))]
 #[path = "cef/cef.rs"]
 pub mod cef;
-// Compiled without the feature too: it needs nothing of CEF's, and that is
-// what keeps its types in `events.ts` and its tests in a bare `cargo test`.
-#[cfg(target_os = "macos")]
+// Compiled without the feature *and* on every platform, and the second half is
+// the same reason as the first: `events.ts` is generated from whatever exports
+// ran, so gating this anywhere drops `ChromiumStatus` from a checked-in file
+// that `BrowserPane` imports — a `cargo test` on Linux would rewrite the type
+// out and break the frontend build with nothing pointing at the cause.
 pub mod chromium;
 mod local_servers;
 pub mod docs;
