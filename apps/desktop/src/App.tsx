@@ -2495,7 +2495,7 @@ function App() {
               projects={spaceProjects}
               projectPath={projectPath}
               onSelectProject={handleSelectProject}
-              onAttachProject={handleAttachProject}
+              onAttachProject={() => void handleAttachProject(space)}
               branches={branches}
               branch={branch}
               onSelectBranch={handleSelectBranch}
@@ -2509,6 +2509,7 @@ function App() {
               onAttach={() => void pickAttachments(selectedSessionId)}
               contextUsage={contextUsage}
               usage={usage}
+              cwd={composerCwd}
               isNewSession={!selectedSessionId}
               busy={busy}
             />

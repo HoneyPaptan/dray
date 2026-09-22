@@ -441,14 +441,32 @@ const setUseWorktree = (next: boolean | ((prev: boolean) => boolean)) => {
 
 // Attaching a known project just selects it, so this doubles as "switch to one
 // I already have" without the picker growing duplicates.
-const handleAttachProject = async () => {
-  const picked = await open({ directory: true, multiple: false });
-  if (typeof picked !== "string") return;
-
+//
+// `space` is the one in force, and passing it is what makes attaching from
+// inside a space work at all: a project lands untagged, the composer is drawn
+// from the space's own projects, and the layout effect clears any pick that
+// falls outside it — so an attach made inside a space used to leave the reader
+// exactly where they started, with no project and no sentence saying why.
+const handleAttachProject = async (space: string | null = null) => {
   try {
-    // Returns the list already sorted, so the attached project is at the front.
-    setProjects(await call<Project[]>("add_project", { path: picked }));
-    setProjectPath(picked);
+    const picked = await open({ directory: true, multiple: false });
+    if (typeof picked !== "string") return;
+
+    // Returns the list already sorted, so the attached project is at the front
+    // — and it is read from there rather than from `picked`, since the backend
+    // canonicalizes: a directory reached through a symlink or named with a
+    // trailing slash is filed under a path the picked string never matches, and
+    // a pick nothing in the list carries draws as "Attach project".
+    let list = await call<Project[]>("add_project", { path: picked });
+    const attached = list[0];
+    if (!attached) return;
+
+    if (space !== null && attached.space !== space) {
+      list = await call<Project[]>("set_project_space", { path: attached.path, space });
+    }
+
+    setProjects(list);
+    setProjectPath(attached.path);
   } catch (e) {
     setError(String(e));
   }
