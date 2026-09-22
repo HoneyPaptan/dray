@@ -53,6 +53,10 @@ const AGENT_LABELS: Record<Harness, string> = {
   codex: "Codex",
   pi: "pi",
   fx: "fx",
+  // xAI's own name for the CLI. Not "grok", which is the chat assistant every
+  // one of these models is also served by — the installer calls this one Grok
+  // Build and the picker is naming an agent, not a model.
+  grok: "Grok",
 };
 const AGENTS = HARNESS_ORDER.map((id) => ({ id, label: AGENT_LABELS[id] }));
 
@@ -487,7 +491,15 @@ export default function ModelSelector({
         // the width — and fx's gateway names a model by its vendor too
         // (`anthropic/claude-opus-5`), which made the menu visibly wider on
         // that one harness for no reason a reader could see. Rows truncate.
-        className="w-[200px]"
+        //
+        // **The agent track is what sets the number, not the rows.** It is the
+        // one thing here that cannot truncate: five marks at `size-6` are 120px
+        // before the ⌘/Shift/A caps beside them, and at 200px the chord's last
+        // cap was clipped by the menu's edge. 8 (menu `p-1`) + 8 (track `p-1`)
+        // + 120 + 4 (`gap-1`) + 86 (three caps at `gap-1`, "Shift" spelled out)
+        // = 226. A sixth agent costs another 24 and wants this raised again —
+        // or the hint dropped, which is what the fx arm below already does.
+        className="w-[232px]"
         // The trigger is also the tooltip trigger, so Radix returning focus to
         // it on close reopens the tooltip on that focus and leaves it stuck
         // until the next click. Don't refocus the trigger — the composer takes
