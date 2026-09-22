@@ -51,14 +51,19 @@ pnpm workspace, two apps, no shared package yet.
 
 ```
 apps/desktop/   the Tauri app — everything below this section describe it
-apps/web/       marketing site: Next.js App Router, Tailwind 4, deploy Vercel
+apps/cli/       the `dray` CLI — own crate, own release tag, the app's only
+                inbound channel; see Orchestration
 ```
+
+**This fork carry no `apps/web`.** Upstream keep a marketing site there (Next.js
+on Vercel); it ship nothing the desktop app need, so it went. Passages below
+that name `apps/web` — the site half of Analytics, the `packages/ui` note —
+describe upstream and are kept for when this fork pull from it.
 
 Root `package.json` carry **no dependencies** — name, `packageManager`, `pnpm --filter` aliases only. Keep it that way: dep at root install into root `node_modules`, which both apps resolve through, so version drift there show up as one app mysteriously working.
 
 Two things repo-wide on purpose. Release pipeline = desktop's alone but live in root `.github/workflows`, so paths carry `apps/desktop/` prefix and `tauri-action` need `projectPath`. And `pnpm-lock.yaml` single for whole workspace, why `pnpm install` run at root and nowhere else.
 
-`apps/web` share design language with app but **no code** — no build step reach across, no import cross line. First component genuinely wanted in both = reason to create `packages/ui`, nothing before.
 
 ## Design direction
 
