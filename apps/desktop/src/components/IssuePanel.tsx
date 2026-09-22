@@ -6,10 +6,12 @@ import { ChevronRight, ExternalLink, Unlink } from "lucide-react";
 import Avatar from "@/components/Avatar";
 import { IssueFile, IssueImage } from "@/components/IssueAsset";
 import { PriorityMenu, StatusMenu } from "@/components/IssueMenus";
+import IssueLabelChip from "@/components/IssueLabelChip";
 import IssueStateIcon, { IssuePriorityIcon } from "@/components/IssueStateIcon";
 import { Markdown } from "@/components/chat/Markdown";
 import { Button } from "@/components/ui/button";
 import { relativeTime } from "@/lib/format";
+import { shortIdentifier } from "@/lib/issue";
 import { cn } from "@/lib/utils";
 import type { Components } from "streamdown";
 
@@ -22,7 +24,9 @@ import type { IssueDetail, IssueRef, IssueUnavailable } from "@/types/events";
 /// be pasted; a sentence pointing at Settings would send the reader to a row
 /// that only ever disconnects.
 const UNAVAILABLE: Record<IssueUnavailable["kind"], string> = {
-  not_connected: "Connect Linear on the Issues page to see this issue.",
+  // Names neither tracker, because this row can be either: a session carries
+  // both kinds of link, and the page is where both are connected.
+  not_connected: "Connect a tracker on the Issues page to see this issue.",
   unauthorized:
     "Linear rejected the saved key. Disconnect it in Settings, then paste a new one on the Issues page.",
   offline: "Could not reach Linear.",
@@ -227,13 +231,25 @@ function IssueRow({
             A menu only once the read has landed: before that there is nothing
             to check against and no id to write with, and a menu that opens on
             a guess is worse than a glyph that waits. */}
-        {detail ? (
-          <PriorityMenu issue={target(issue, detail)} priority={detail.priority} />
-        ) : (
-          <IssuePriorityIcon priority="none" />
-        )}
+        {/* GitHub has no priority field at all, so the slot is not reserved
+            either — a glyph reading "none" on every row of a GitHub-linked
+            session would say the work is unprioritized, where the truth is that
+            the tracker never asks. */}
+        {issue.tracker === "linear" &&
+          (detail ? (
+            <PriorityMenu issue={target(issue, detail)} priority={detail.priority} />
+          ) : (
+            <IssuePriorityIcon priority="none" />
+          ))}
 
-        <span className="shrink-0 font-medium tabular-nums">{issue.identifier}</span>
+        {/* The number alone. `monorepo-labs/dray#108` is most of a narrow
+            panel's width spent on the half that is the same for every issue in
+            the repository — the slug is said once, in the meta line under the
+            title, where it does not push the status and the title off the row.
+            Linear's identifier is already short and carries its team key. */}
+        <span className="min-w-0 shrink-0 truncate font-medium tabular-nums">
+          {shortIdentifier(issue.identifier)}
+        </span>
 
         {/* From the read where it has landed, and a resting glyph until then —
             so the row never jumps between two heights as detail arrives. */}
@@ -309,6 +325,18 @@ function IssueBody({ detail, loading }: { detail: IssueDetail | null; loading: b
   return (
     <div className="flex flex-col gap-3 px-3 pb-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-ui text-muted-foreground">
+        {/* Who filed it, and it leads the line because it is the one that
+            always has an answer — a GitHub issue is assigned to nobody far more
+            often than not, so a line opening with the assignee opens with a
+            blank on most rows. Worded, since a bare face beside another bare
+            face says nothing about which is which. */}
+        {detail.author && (
+          <span className="flex items-center gap-1.5">
+            <Avatar src={detail.author.avatar} name={detail.author.name} />
+            {detail.author.name} opened this
+          </span>
+        )}
+
         {detail.assignee && (
           <span className="flex items-center gap-1.5">
             <Avatar src={detail.assignee.avatar} name={detail.assignee.name} />
@@ -327,16 +355,7 @@ function IssueBody({ detail, loading }: { detail: IssueDetail | null; loading: b
       {detail.labels.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {detail.labels.map((label) => (
-            // The tracker's own colour, and the one place this panel uses it:
-            // a label has no meaning apart from the colour somebody chose for
-            // it, unlike a status, which folds onto a fixed vocabulary.
-            <span
-              key={label.name}
-              className="rounded-full border px-1.5 py-px text-ui"
-              style={{ borderColor: label.color || undefined, color: label.color || undefined }}
-            >
-              {label.name}
-            </span>
+            <IssueLabelChip key={label.name} label={label} className="text-ui" />
           ))}
         </div>
       )}

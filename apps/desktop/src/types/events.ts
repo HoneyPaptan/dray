@@ -793,7 +793,7 @@ export type InstallError = { "stage": "install", message: string, } | { "stage":
 /**
  * What the settings dialog draws. `None` is a tracker nobody has connected.
  */
-export type IntegrationsView = { linear: TrackerAccount | null, };
+export type IntegrationsView = { linear: TrackerAccount | null, github: TrackerAccount | null, };
 
 /**
  * One row in a list, and everything a row draws.
@@ -802,12 +802,35 @@ export type IntegrationsView = { linear: TrackerAccount | null, };
  * read does not ask for descriptions or comments, and a struct that carries
  * them anyway hands the panel an issue whose body is silently missing.
  */
-export type Issue = { tracker: IssueTracker, id: string, identifier: string, title: string, url: string, state: IssueState, priority: IssuePriority, assignee: IssuePerson | null, labels: Array<IssueLabel>, 
+export type Issue = { tracker: IssueTracker, id: string, identifier: string, title: string, url: string, state: IssueState, priority: IssuePriority, assignee: IssuePerson | null, 
+/**
+ * Who filed it. A different question from who is *doing* it, and the one
+ * that more often has an answer: an issue is always opened by somebody and
+ * is frequently assigned to nobody — which on GitHub is the ordinary case
+ * rather than a gap.
+ */
+author: IssuePerson | null, labels: Array<IssueLabel>, 
 /**
  * Team key (`DRA`) — what the identifier is built from, so a row filtered
  * across teams still says which one it belongs to.
  */
-team: string | null, project: string | null, updatedAt: string, };
+team: string | null, project: string | null, updatedAt: string, 
+/**
+ * When it was filed. Beside `updated_at` rather than replacing it: the
+ * list row says when the work appeared, the opened issue's own header says
+ * when it last moved, and those are two questions.
+ */
+createdAt: string, 
+/**
+ * Pull requests linked to it, by number.
+ *
+ * The one fact both trackers hold about work already under way, told two
+ * ways: GitHub's own `closedByPullRequestsReferences` and the GitHub
+ * attachments Linear's integration writes onto an issue. Numbers alone,
+ * since that is what the chip says — a row that has to be opened to learn
+ * whether anybody has started is the row asking to be clicked through.
+ */
+pullRequests: Array<number>, };
 
 /**
  * A file uploaded to an issue, fetched with the stored key.
@@ -851,17 +874,50 @@ description: string | null, comments: Array<IssueComment>,
  * open is a menu that opens empty. Per *team*, so an issue moved between
  * teams offers the states of wherever it now lives.
  */
-states: Array<IssueState>, tracker: IssueTracker, id: string, identifier: string, title: string, url: string, state: IssueState, priority: IssuePriority, assignee: IssuePerson | null, labels: Array<IssueLabel>, 
+states: Array<IssueState>, tracker: IssueTracker, id: string, identifier: string, title: string, url: string, state: IssueState, priority: IssuePriority, assignee: IssuePerson | null, 
+/**
+ * Who filed it. A different question from who is *doing* it, and the one
+ * that more often has an answer: an issue is always opened by somebody and
+ * is frequently assigned to nobody — which on GitHub is the ordinary case
+ * rather than a gap.
+ */
+author: IssuePerson | null, labels: Array<IssueLabel>, 
 /**
  * Team key (`DRA`) — what the identifier is built from, so a row filtered
  * across teams still says which one it belongs to.
  */
-team: string | null, project: string | null, updatedAt: string, };
+team: string | null, project: string | null, updatedAt: string, 
+/**
+ * When it was filed. Beside `updated_at` rather than replacing it: the
+ * list row says when the work appeared, the opened issue's own header says
+ * when it last moved, and those are two questions.
+ */
+createdAt: string, 
+/**
+ * Pull requests linked to it, by number.
+ *
+ * The one fact both trackers hold about work already under way, told two
+ * ways: GitHub's own `closedByPullRequestsReferences` and the GitHub
+ * attachments Linear's integration writes onto an issue. Numbers alone,
+ * since that is what the chip says — a row that has to be opened to learn
+ * whether anybody has started is the row asking to be clicked through.
+ */
+pullRequests: Array<number>, };
 
 /**
  * The filter row's options, read once per connection rather than per keystroke.
  */
 export type IssueFilters = { teams: Array<IssueGroup>, projects: Array<IssueGroup>, 
+/**
+ * The labels the filter row offers, with the colours they are drawn in.
+ *
+ * **Per repository, not per workspace**, which is why `list_issue_filters`
+ * takes the repository it is being asked about: a label is one repo's own
+ * vocabulary, and a list gathered across several would offer rows that
+ * match nothing in the one on screen. Empty for Linear, where the section
+ * is simply not drawn.
+ */
+labels: Array<IssueLabel>, 
 /**
  * Every team's workflow states, keyed by team **key** (`DRA`) — what a
  * row carries, where `teams` above is keyed by UUID.
@@ -894,14 +950,29 @@ export type IssuePriority = "urgent" | "high" | "medium" | "low" | "none";
  */
 export type IssueQuery = { 
 /**
+ * Which tracker is being asked. `#[serde(default)]` on the struct makes an
+ * absent one Linear, which is what every caller meant before there were
+ * two.
+ */
+tracker: IssueTracker, 
+/**
  * Free text. Matched against title and identifier; an empty query is the
  * resting state and lists rather than searches.
  */
 text: string | null, scope: IssueScope, 
 /**
- * Linear team id.
+ * Linear team id — and under GitHub the **repository slug**, since a
+ * repository is what an issue there belongs to and what the page reads one
+ * at a time. One field rather than two, because it is one question: which
+ * bucket of the tracker to read.
  */
 teamId: string | null, projectId: string | null, 
+/**
+ * One label's name, or `None` for no label filter. The name rather than an
+ * id, since that is what `gh issue list --label` takes and what a label is
+ * addressed by on GitHub.
+ */
+label: string | null, 
 /**
  * Which half of the workspace to read: the unfinished issues, or the done
  * and cancelled ones.
@@ -967,10 +1038,10 @@ color: string, };
 export type IssueStateKind = "triage" | "backlog" | "unstarted" | "started" | "completed" | "canceled" | "other";
 
 /**
- * Who tracks the issue. One variant today; it is on the wire and on disk so a
- * session linked to a Linear issue stays readable once there are two.
+ * Who tracks the issue. On the wire and on disk, which is what kept a session
+ * linked to a Linear issue readable when the second variant landed.
  */
-export type IssueTracker = "linear";
+export type IssueTracker = "linear" | "github";
 
 /**
  * Why there is nothing to show.

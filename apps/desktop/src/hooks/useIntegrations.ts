@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 
 import { forgetIssues } from "@/hooks/useIssues";
+import { connectedTrackers } from "@/lib/issueTracker";
 import type { IntegrationsView } from "@/types/events";
 
 /// The connected issue tracker, and the two writes that change it.
@@ -53,6 +54,35 @@ export function useIntegrations(enabled: boolean) {
     }
   }, []);
 
+  /// Asks again whether `gh` is there and signed in, after the reader has gone
+  /// and done something about it.
+  ///
+  /// **Two caches, and clearing one is not enough.** `binpath::gh` remembers an
+  /// absent CLI and `issues::github` remembers a logged-out one, both for the
+  /// life of the process — so without this, a `gh auth login` that worked left
+  /// the connect pane exactly as it was until the app was relaunched, which is
+  /// the one thing a pane asking for a sign-in cannot look like. `recheck_gh`
+  /// throws the first away; re-reading the integrations is what the pane draws
+  /// from; `forgetIssues` is what makes the list actually re-read, since every
+  /// cached answer here was taken while signed out — the `not_connected`
+  /// failure this pane was drawn from included.
+  ///
+  /// The same control serves both halves, deliberately: a missing `gh` and a
+  /// logged-out one are one state on this surface (`NotConnected`), so a button
+  /// that claimed to know which one it had just fixed would be guessing.
+  const recheckGithub = useCallback(async () => {
+    setBusy(true);
+    try {
+      await invoke<boolean>("recheck_gh").catch(() => false);
+      setIntegrations(await invoke<IntegrationsView>("get_integrations"));
+      forgetIssues();
+    } catch (e) {
+      console.error("[integrations]", e);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const disconnect = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -68,5 +98,17 @@ export function useIntegrations(enabled: boolean) {
     }
   }, []);
 
-  return { integrations, busy, error, connect, disconnect };
+  return {
+    integrations,
+    /// Which trackers have something behind them. Read by the chips, by the
+    /// page's empty state and by `App`'s own "is anything connected" — one
+    /// answer, since a second reading of `integrations` per surface is a second
+    /// answer free to disagree with the first.
+    connected: connectedTrackers(integrations),
+    busy,
+    error,
+    connect,
+    disconnect,
+    recheckGithub,
+  };
 }

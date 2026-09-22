@@ -7,7 +7,9 @@ import {
   issueGeneration,
   newIssueGeneration,
   subscribeIssueGeneration,
+  trackerOf,
 } from "@/lib/issue";
+import { readIssueRepo, setIssueRepo } from "@/lib/issueTracker";
 
 import type {
   Issue,
@@ -17,6 +19,7 @@ import type {
   IssueQuery,
   IssueRef,
   IssueState,
+  IssueTracker,
   IssueUnavailable,
 } from "@/types/events";
 
@@ -58,10 +61,15 @@ const MAX_CACHED = 12;
 /// shape would hand it a different field the day this gains one.
 const keyOf = (query: IssueQuery) =>
   JSON.stringify({
+    // First, and it is load-bearing: two trackers answer the same
+    // scope-and-settled question with entirely different issues, so without it
+    // flipping the chip paints Linear's list under GitHub's chip.
+    tracker: query.tracker,
     text: query.text ?? "",
     scope: query.scope,
     teamId: query.teamId ?? "",
     projectId: query.projectId ?? "",
+    label: query.label ?? "",
     settled: query.settled,
   });
 
@@ -390,7 +398,9 @@ async function send(
       // The tracker's own words. A rejected key, an unreachable workspace and a
       // state belonging to another team each need a different thing done about
       // them, and only the sentence tells them apart.
-      detail: issueErrorText(asUnavailable(e)),
+      // By shape, since a write names one issue and nothing here was told which
+      // tracker it belongs to.
+      detail: issueErrorText(asUnavailable(e), trackerOf(issue.identifier)),
     });
   } finally {
     released(issue.id);
@@ -398,14 +408,27 @@ async function send(
 }
 
 /// A failed write in one line, in terms of what the reader would do about it.
-function issueErrorText(error: IssueUnavailable): string {
+///
+/// **The two sentences that name Linear are drawn for Linear alone.** A stored
+/// key and an unreachable GraphQL API are Linear's failures; GitHub's
+/// credential is `gh`'s own and there is nothing in Settings to disconnect, so
+/// telling a reader to go and re-paste a key they never pasted sends them to do
+/// nothing. Everything else is already tracker-neutral, and `other` carries the
+/// CLI's or the API's own words either way.
+export function issueErrorText(error: IssueUnavailable, tracker: IssueTracker = "linear"): string {
+  const linear = tracker === "linear";
+
   switch (error.kind) {
     case "unauthorized":
-      return "Linear rejected the saved key. Disconnect it in Settings, then paste a new one.";
+      return linear
+        ? "Linear rejected the saved key. Disconnect it in Settings, then paste a new one."
+        : "GitHub refused that read. Sign in again with `gh auth login`.";
     case "offline":
-      return "Could not reach Linear.";
+      return linear ? "Could not reach Linear." : "Could not reach GitHub.";
     case "not_connected":
-      return "No issue tracker connected.";
+      return linear
+        ? "No issue tracker connected."
+        : "Not signed in to GitHub. Run `gh auth login`.";
     default:
       return error.detail;
   }
@@ -421,14 +444,22 @@ export function asUnavailable(e: unknown): IssueUnavailable {
   return { kind: "other", detail: String(e) };
 }
 
-const DEFAULT_QUERY: IssueQuery = {
+/// The resting question, for whichever tracker is up.
+///
+/// **`teamId` is the repository under GitHub**, and it is read from the
+/// reader's own stored pick rather than left null: a number is only addressable
+/// within a repository, so a null there is not "every repo" but "nothing to
+/// read", which is what the page's own empty state says.
+const defaultQuery = (tracker: IssueQuery["tracker"]): IssueQuery => ({
+  tracker,
   text: null,
   // The default is the useful one: what this person is meant to be working on.
   scope: "assigned",
-  teamId: null,
+  teamId: tracker === "github" ? readIssueRepo() : null,
   projectId: null,
+  label: null,
   settled: false,
-};
+});
 
 /// One list read, cached and debounced. The page runs two of these.
 ///
@@ -451,6 +482,27 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
   /// cannot tell "nothing here" from "not asked yet" — and the two draw
   /// differently on a group header that has no count to show until it has.
   const [answered, setAnswered] = useState(() => cache.has(key));
+
+  /// Which tracker the rows above came from.
+  ///
+  /// **Rows outlive a key change on purpose** — typing in the search box makes
+  /// a key nothing is cached under on every keystroke, and blanking the list
+  /// under the reader each time is the flicker this cache exists to remove. A
+  /// *tracker* change is the one key change where that is wrong: the rows are
+  /// another workspace's, the headings above them have already changed, and a
+  /// read that then fails leaves Linear's issues sitting under GitHub's error.
+  /// So this is dropped by tracker alone, and every other key change still
+  /// paints through.
+  const [shownTracker, setShownTracker] = useState(query.tracker);
+
+  if (shownTracker !== query.tracker) {
+    // During render rather than in an effect, which lands after paint: the
+    // frame in between is exactly the one that draws the wrong tracker's rows.
+    setShownTracker(query.tracker);
+    setIssues(cache.get(key) ?? []);
+    setAnswered(cache.has(key));
+    setUnavailable(null);
+  }
 
   useEffect(() => {
     if (!enabled) return;
@@ -530,9 +582,20 @@ function useIssueList(query: IssueQuery, enabled: boolean, generation: number) {
 /// Filters live here rather than in the view so the read and the controls that
 /// change it cannot disagree about what is on screen — the page draws what this
 /// answers and owns none of it.
-export function useIssues(active: boolean) {
-  const [query, setQuery] = useState<IssueQuery>(DEFAULT_QUERY);
+export function useIssues(active: boolean, tracker: IssueQuery["tracker"] = "linear") {
+  const [query, setQuery] = useState<IssueQuery>(() => defaultQuery(tracker));
   const [filters, setFilters] = useState<IssueFilters | null>(null);
+
+  // A tracker switch is a different workspace, so both the narrowing and the
+  // options it was built from stop meaning anything: a Linear team id under
+  // GitHub names no repository, and the filter menu would go on offering teams
+  // that are not there. Reset during render rather than in an effect, the
+  // reading `useSessionIssues` takes — an effect is a frame behind, and that
+  // frame reads Linear's list under GitHub's chip.
+  if (query.tracker !== tracker) {
+    setQuery(defaultQuery(tracker));
+    setFilters(null);
+  }
   /// Bumped to force a read the query alone would not trigger — the refresh
   /// button, and a connection that just changed under the page. It is what
   /// re-arms the effect; `forgetIssues()` beside it is what makes the read
@@ -548,21 +611,47 @@ export function useIssues(active: boolean) {
   /// read anyway.
   const [wantSettled, setWantSettled] = useState(false);
 
-  const openQuery = useMemo(() => ({ ...query, settled: false }), [query]);
+  // The query's own `settled`, not a forced `false`: GitHub has two states and
+  // a switch picks between them, so *this* is the list on screen. Linear leaves
+  // the field at its default and reads its finished work through the settled
+  // groups below instead, which is what its five-state workflow wants.
+  const openQuery = query;
   const settledQuery = useMemo(() => ({ ...query, settled: true }), [query]);
 
   const open = useIssueList(openQuery, active, generation);
-  const settled = useIssueList(settledQuery, active && wantSettled, generation);
+  // **Linear's alone.** `wantSettled` is sticky for the life of the page, so
+  // without the harness check a reader who had ever opened a Done group went on
+  // paying a second `gh` spawn behind every GitHub query — for a list GitHub
+  // never draws, its finished work being the state switch's other half. One
+  // wasted `gh` per query is not nothing: that budget is per user and every
+  // agent in every session spends it too.
+  const settled = useIssueList(
+    settledQuery,
+    active && wantSettled && tracker === "linear",
+    generation,
+  );
 
-  // Read once per visit rather than with every list: teams and projects change
-  // on the timescale of somebody reorganising a workspace, and this is a second
-  // round trip behind the rows the reader is waiting for.
+  /// Which repository the options on hand describe.
+  ///
+  /// Teams and projects change on the timescale of somebody reorganising a
+  /// workspace, so this is read once per visit — but **labels belong to one
+  /// repository**, so the read has to move when the repository does or the menu
+  /// offers another repo's vocabulary. Held rather than folded into `filters`,
+  /// which is null while the read is out and would re-arm this on itself.
+  const [filtersRepo, setFiltersRepo] = useState<string | null>(query.teamId);
+  const wantedRepo = tracker === "github" ? query.teamId : null;
+  const staleFilters = filters !== null && filtersRepo !== wantedRepo;
+
   useEffect(() => {
-    if (!active || filters) return;
+    if (!active || (filters && !staleFilters)) return;
 
     let live = true;
-    invoke<IssueFilters>("list_issue_filters")
-      .then((next) => live && setFilters(next))
+    invoke<IssueFilters>("list_issue_filters", { tracker, repo: wantedRepo })
+      .then((next) => {
+        if (!live) return;
+        setFilters(next);
+        setFiltersRepo(wantedRepo);
+      })
       // Silent: with no filters the row simply offers less, and the list above
       // has already said whatever went wrong.
       .catch(() => {});
@@ -570,13 +659,23 @@ export function useIssues(active: boolean) {
     return () => {
       live = false;
     };
-  }, [active, filters, generation]);
+  }, [active, filters, staleFilters, wantedRepo, generation, tracker]);
 
   return {
     issues: open.issues,
     filters,
     query,
-    setQuery,
+    /// Every change to the query goes through here, which is what makes the
+    /// repository pick persist: `teamId` under GitHub *is* the repository, and
+    /// the page is opened again far more often than it is filtered, so
+    /// forgetting it would mean picking a repo on every visit.
+    setQuery: useCallback(
+      (next: IssueQuery) => {
+        if (next.tracker === "github") setIssueRepo(next.teamId);
+        setQuery(next);
+      },
+      [],
+    ),
     loading: open.loading || settled.loading,
     /// Whether the open list has ever answered. `issues.length` cannot say it:
     /// an empty workspace and a first read still in flight both read as zero
