@@ -17,7 +17,7 @@ export const STARRED_MODELS_KEY = "ade.starredModels";
 /// reads. Claude Code, Codex and grok each ship a handful of models Dray names
 /// itself, where a shortlist would be one more thing to set up before the
 /// picker works at all.
-const SHORTLISTED: Harness[] = ["pi", "fx", "opencode"];
+const SHORTLISTED: Harness[] = ["pi", "fx", "opencode", "cline"];
 
 export function usesShortlist(harness: Harness): boolean {
   return SHORTLISTED.includes(harness);
@@ -84,13 +84,21 @@ export function shortlist(
 /// The two harnesses answer the same question differently and both are here:
 /// pi bounds an unbounded discovered list by what the reader starred, where
 /// Claude Code and Codex bound a written one by `secondary`.
+/// A list short enough that a shortlist would only get in front of it.
+///
+/// The shortlist exists because pi answers with hundreds of rows. A slot
+/// narrowing that to one provider can be a dozen, and there a shortlist is a
+/// setup step standing in front of a menu that already fitted on screen, with
+/// "No models shortlisted yet" drawn over a picker that cannot pick.
+const SHORT_ENOUGH = 12;
+
 export function topLevel(
   models: Model[],
   starred: ModelId[],
   harness: Harness,
   current: ModelId,
 ): Model[] {
-  return usesShortlist(harness)
+  return usesShortlist(harness) && models.length > SHORT_ENOUGH
     ? shortlist(models, starred, current)
     : models.filter((m) => !m.secondary);
 }
@@ -98,7 +106,11 @@ export function topLevel(
 /// What the picker folds into "More models". Empty for a shortlisted harness,
 /// whose own overflow is the library dialog rather than a submenu.
 export function underMore(models: Model[], harness: Harness): Model[] {
-  return usesShortlist(harness) ? [] : models.filter((m) => m.secondary);
+  // Read against the same list `topLevel` drew from, or a short list would be
+  // drawn whole *and* have its secondary rows folded under a submenu as well.
+  return usesShortlist(harness) && models.length > SHORT_ENOUGH
+    ? []
+    : models.filter((m) => m.secondary);
 }
 
 /// [`topLevel`] for a caller with no `starred` state of its own.
@@ -130,6 +142,25 @@ export function byProvider(models: Model[]): { provider: string; models: Model[]
   }
 
   return groups;
+}
+
+/// The row's own name: the label with its provider prefix taken off.
+///
+/// opencode names a model by its whole route — `openrouter/anthropic/claude-
+/// opus-5` — so one provider's list reads as its own name a hundred times over,
+/// with the part that differs pushed off the right edge of a phone. The
+/// provider is the heading's to say, which is why a stripped list always draws
+/// one. A label that never carried the prefix (fx, Claude Code) is untouched,
+/// so the heading rule below leaves those lists exactly as they were.
+export function modelName(model: Model): string {
+  const prefix = `${model.provider}/`;
+  return model.label.startsWith(prefix) ? model.label.slice(prefix.length) : model.label;
+}
+
+/// Whether any of these rows lost a prefix, and therefore whether the provider
+/// still has somewhere to be said.
+export function namesProvider(models: Model[]): boolean {
+  return models.some((m) => m.label.startsWith(`${m.provider}/`));
 }
 
 export function toggleStar(starred: ModelId[], id: ModelId): ModelId[] {

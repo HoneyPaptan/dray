@@ -7,27 +7,105 @@
 //! `Command::new("claude")` resolves under `pnpm tauri dev` and fails from the
 //! bundle, which is the same binary behaving differently by how it was started.
 //!
-//! Resolved once into a `OnceLock` and reused: the login-shell probe below costs
-//! real time (a shell reading the user's whole rc chain), and the answer can't
-//! change while the app runs.
+//! Resolved once into a [`Slot`] and reused: the login-shell probe below costs
+//! real time (a shell reading the user's whole rc chain). Thrown away only when
+//! a reader says they have just installed something, since that is the one way
+//! the answer moves under a running app.
 
 use crate::harness::Harness;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{OnceLock, RwLock};
+use std::sync::RwLock;
 use tokio::process::Command;
 
-static CLAUDE_PATH: OnceLock<PathBuf> = OnceLock::new();
-/// Not a `OnceLock` like the two beside it, because this one caches an
-/// *absence* and that absence is what the reader is being asked to fix — see
-/// [`forget_gh`].
-static GH_PATH: RwLock<Option<Option<PathBuf>>> = RwLock::new(None);
-/// Bumped by every [`forget_gh`], so a probe already running when the reader
-/// installed `gh` cannot put its own miss back over the answer.
-static GH_GENERATION: AtomicU64 = AtomicU64::new(0);
-static CODEX_PATH: OnceLock<PathBuf> = OnceLock::new();
+/// A resolved answer, kept for the life of the process or until thrown away.
+///
+/// Not a `OnceLock`, because every slot here caches an *absence* as readily as
+/// a hit — a missing CLI is the expensive resolution, ending in a login shell —
+/// and an absence is the one answer the reader is being asked to fix. A reader
+/// who installs the CLI the composer just named has to reach the app without
+/// restarting it, since nothing on screen would tell them to.
+///
+/// **The generation is what makes forgetting stick.** A probe already running
+/// when the reader installs would otherwise finish and publish its miss back
+/// over the cleared slot, undoing the recheck with a reading older than it. It
+/// still answers its own caller — who asked before the install — and only the
+/// cache refuses it.
+///
+/// A race between two resolutions is harmless: both looked at the same machine,
+/// and the loser just drops its copy.
+struct Slot<T> {
+    value: RwLock<Option<T>>,
+    generation: AtomicU64,
+}
+
+impl<T> Slot<T> {
+    const fn new() -> Self {
+        Self {
+            value: RwLock::new(None),
+            generation: AtomicU64::new(0),
+        }
+    }
+}
+
+impl<T: Clone> Slot<T> {
+    /// The cached answer, or `None` where nothing has resolved one yet.
+    fn peek(&self) -> Option<T> {
+        self.value.read().unwrap().clone()
+    }
+
+    /// Throws the answer away, so the next read resolves again.
+    fn forget(&self) {
+        // Bumped under the same lock the value is written through, so a probe
+        // cannot slip between the clear and the bump and come back looking
+        // current.
+        let mut slot = self.value.write().unwrap();
+        *slot = None;
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+
+    async fn get_or_init(&self, resolve: impl Future<Output = T>) -> T {
+        // Read and the guard dropped before the probe: `resolve` awaits, and a
+        // std guard must not be held across one.
+        if let Some(hit) = self.peek() {
+            return hit;
+        }
+        let generation = self.generation.load(Ordering::Acquire);
+        let resolved = resolve.await;
+        self.publish(generation, resolved)
+    }
+
+    /// [`get_or_init`] for a resolver that does not await.
+    ///
+    /// [`get_or_init`]: Slot::get_or_init
+    fn get_or_init_with(&self, resolve: impl FnOnce() -> T) -> T {
+        if let Some(hit) = self.peek() {
+            return hit;
+        }
+        let generation = self.generation.load(Ordering::Acquire);
+        self.publish(generation, resolve())
+    }
+
+    /// Writes `resolved` back where no [`forget`] has happened since the read
+    /// that produced it, and answers it either way.
+    ///
+    /// [`forget`]: Slot::forget
+    fn publish(&self, generation: u64, resolved: T) -> T {
+        // Taken outside the resolution: those spawn a login shell, and holding
+        // a write guard across one would park every other caller behind it.
+        let mut slot = self.value.write().unwrap();
+        if self.generation.load(Ordering::Acquire) == generation {
+            *slot = Some(resolved.clone());
+        }
+        resolved
+    }
+}
+
+static CLAUDE_PATH: Slot<PathBuf> = Slot::new();
+static GH_PATH: Slot<Option<PathBuf>> = Slot::new();
+static CODEX_PATH: Slot<PathBuf> = Slot::new();
 
 /// The `codex` shipped inside the ChatGPT desktop app.
 ///
@@ -44,19 +122,7 @@ const CHATGPT_APP_CODEX: &str = "/Applications/ChatGPT.app/Contents/Resources/co
 /// already was — a spawn error naming the binary — instead of turning a
 /// resolvable-by-PATH case we didn't predict into a hard stop.
 pub async fn claude() -> PathBuf {
-    cached(&CLAUDE_PATH, or_bare("claude")).await
-}
-
-/// The slot's answer, or `resolve`'s, kept for the life of the process.
-///
-/// A race here is harmless: both threads resolved the same binary, and the
-/// loser just drops its copy.
-async fn cached<T: Clone>(slot: &'static OnceLock<T>, resolve: impl Future<Output = T>) -> T {
-    if let Some(hit) = slot.get() {
-        return hit.clone();
-    }
-    let resolved = resolve.await;
-    slot.get_or_init(|| resolved).clone()
+    CLAUDE_PATH.get_or_init(or_bare("claude")).await
 }
 
 /// Resolves `name`, falling back to the bare name rather than erroring: that
@@ -79,30 +145,7 @@ async fn or_bare(name: &str) -> PathBuf {
 /// thrown away, since [`forget_gh`] is how a reader who has just installed `gh`
 /// gets an answer without restarting the app.
 pub async fn gh() -> Option<PathBuf> {
-    // Cloned out and the guard dropped before the probe: `resolve` awaits, and
-    // a std guard must not be held across one.
-    let cached = GH_PATH.read().unwrap().clone();
-    if let Some(hit) = cached {
-        return hit;
-    }
-
-    // Read before the probe, compared after it — the same bargain the issue
-    // caches make with their own generation. A probe that started before
-    // [`forget_gh`] is answering a question about the machine as it was, and
-    // the reader has since installed the very binary it did not find: publish
-    // it and the recheck they just made is undone by a read older than it.
-    let generation = GH_GENERATION.load(Ordering::Acquire);
-    let found = resolve("gh").await;
-
-    // Resolved outside the lock: `resolve` spawns a login shell, and holding a
-    // write guard across it would park every other caller behind it.
-    let mut slot = GH_PATH.write().unwrap();
-    if GH_GENERATION.load(Ordering::Acquire) == generation {
-        *slot = Some(found.clone());
-    }
-    // Answered either way. The caller asked before the forget and this is the
-    // honest answer to *their* question; only the cache has to refuse it.
-    found
+    GH_PATH.get_or_init(resolve("gh")).await
 }
 
 /// Forgets where `gh` is, so the next [`gh`] call probes again.
@@ -111,13 +154,32 @@ pub async fn gh() -> Option<PathBuf> {
 /// CLI the panel just asked for changes nothing until the app is restarted, and
 /// nothing on screen would say so.
 ///
-/// Bumping under the same lock the value is written through is what makes the
-/// refusal above stick: a probe cannot slip between the clear and the bump and
-/// come back looking current.
 pub fn forget_gh() {
-    let mut slot = GH_PATH.write().unwrap();
-    *slot = None;
-    GH_GENERATION.fetch_add(1, Ordering::Release);
+    GH_PATH.forget();
+}
+
+/// Forgets where every agent CLI is, so the next resolution probes again.
+///
+/// [`forget_gh`]'s reason, one pane over: the composer's notice names an
+/// install command, and running it changed nothing until the app was
+/// restarted — which nothing on screen said to do, so the notice sat there
+/// over a CLI the reader had just installed.
+///
+/// Every agent rather than the one being asked about: the reader is at a
+/// terminal by the time they press it, and installing two while they are there
+/// is likelier than resolving the other five again is expensive.
+pub fn forget_agents() {
+    CLAUDE_PATH.forget();
+    CODEX_PATH.forget();
+    PI_PATH.forget();
+    FX_PATH.forget();
+    GROK_PATH.forget();
+    OPENCODE_PATH.forget();
+    CLINE_PATH.forget();
+    // An npm-installed CLI is a `#!/usr/bin/env node` script, so a `node` that
+    // was absent when the last answer was cached has to be looked for again
+    // too, or the CLI resolves and then fails to spawn.
+    NODE_DIR.forget();
 }
 
 /// The absolute path to a `codex` that can actually speak app-server.
@@ -137,7 +199,7 @@ pub fn forget_gh() {
 /// like [`gh`]: a Codex session is one the reader picked, so a spawn error
 /// naming the binary is the honest failure.
 pub async fn codex() -> PathBuf {
-    cached(&CODEX_PATH, resolve_codex()).await
+    CODEX_PATH.get_or_init(resolve_codex()).await
 }
 
 async fn resolve_codex() -> PathBuf {
@@ -170,7 +232,7 @@ async fn resolve_codex() -> PathBuf {
     resolved.unwrap_or_else(|| PathBuf::from("codex"))
 }
 
-static PI_PATH: OnceLock<PathBuf> = OnceLock::new();
+static PI_PATH: Slot<PathBuf> = Slot::new();
 
 /// Where `pi` is, or the bare name as a last resort — [`claude`]'s shape, and
 /// for its reason.
@@ -186,35 +248,45 @@ static PI_PATH: OnceLock<PathBuf> = OnceLock::new();
 /// `pi --mode rpc` and ask, so the real check costs nothing extra there and a
 /// constant here would be a second thing to keep true.
 pub async fn pi() -> PathBuf {
-    cached(&PI_PATH, or_bare("pi")).await
+    PI_PATH.get_or_init(or_bare("pi")).await
 }
 
-static FX_PATH: OnceLock<PathBuf> = OnceLock::new();
+static FX_PATH: Slot<PathBuf> = Slot::new();
 
 /// Where `fx` is, or the bare name as a last resort — [`claude`]'s shape.
 /// Vercel's installer puts it in `~/.local/bin`, one of the known dirs.
 pub async fn fx() -> PathBuf {
-    cached(&FX_PATH, or_bare("fx")).await
+    FX_PATH.get_or_init(or_bare("fx")).await
 }
 
-static GROK_PATH: OnceLock<PathBuf> = OnceLock::new();
+static GROK_PATH: Slot<PathBuf> = Slot::new();
 
 /// Where `grok` is, or the bare name as a last resort — [`claude`]'s shape.
 /// xAI's installer puts it in `~/.local/bin` and symlinks `~/.grok/bin/grok`
 /// onto the same binary, so the known-dirs pass finds it before the login
 /// shell is ever asked.
 pub async fn grok() -> PathBuf {
-    cached(&GROK_PATH, or_bare("grok")).await
+    GROK_PATH.get_or_init(or_bare("grok")).await
 }
 
-static OPENCODE_PATH: OnceLock<PathBuf> = OnceLock::new();
+static OPENCODE_PATH: Slot<PathBuf> = Slot::new();
 
 /// Where `opencode` is, or the bare name as a last resort — [`claude`]'s shape.
 /// Its installer puts it in `~/.opencode/bin` and distributions package it into
 /// `/usr/bin`, so an inherited `PATH` usually answers before the known-dirs
 /// pass is needed.
 pub async fn opencode() -> PathBuf {
-    cached(&OPENCODE_PATH, or_bare("opencode")).await
+    OPENCODE_PATH.get_or_init(or_bare("opencode")).await
+}
+
+static CLINE_PATH: Slot<PathBuf> = Slot::new();
+
+/// Where `cline` is, or the bare name as a last resort — [`claude`]'s shape.
+/// It installs through npm, so it lands in whichever global bin directory the
+/// reader's node is configured for and the known-dirs pass is what finds it
+/// under a Dock launch.
+pub async fn cline() -> PathBuf {
+    CLINE_PATH.get_or_init(or_bare("cline")).await
 }
 
 #[cfg(test)]
@@ -235,8 +307,8 @@ mod pi_resolution_tests {
 
 /// Whether the agent's CLI is installed and usable.
 ///
-/// Read off the resolver's own answer rather than probing again: both cache in
-/// a `OnceLock`, absence included, so this costs nothing after the first call —
+/// Read off the resolver's own answer rather than probing again: both cache
+/// their answer, absence included, so this costs nothing after the first call —
 /// which matters, since a failed resolution is the expensive one (it ends in a
 /// login shell reading the whole rc chain).
 ///
@@ -247,10 +319,11 @@ mod pi_resolution_tests {
 /// falls through to the bare name exactly like an absent one — and "installed
 /// but cannot be driven" is the same answer to the reader as "not installed".
 ///
-/// The cache never invalidates, so a CLI installed while the app runs still
-/// reads as missing until restart. That is the same bargain `gh` already makes,
-/// and it is why nothing here offers to install anything: the reader is at a
-/// terminal by then anyway.
+/// A CLI installed while the app runs reads as missing until [`forget_agents`]
+/// throws the answer away — the composer's notice is the button that does it.
+/// Nothing here offers to *install* anything: the reader is at a terminal by
+/// then anyway, and a button that ran a script in their shell would be this app
+/// deciding what to execute there.
 pub async fn agent_available(harness: Harness) -> bool {
     harness.names_a_cli() && agent_installed(harness).await
 }
@@ -279,6 +352,7 @@ pub async fn agent_binary(harness: Harness) -> PathBuf {
         Harness::Fx => fx().await,
         Harness::Grok => grok().await,
         Harness::Opencode => opencode().await,
+        Harness::Cline => cline().await,
         // A harness only some other build knows. Its own spelling, which is
         // relative and so reads as "not installed" — the refusal has to happen
         // here rather than by falling back to Claude Code, which would run the
@@ -301,7 +375,7 @@ async fn speaks_app_server(bin: &Path) -> bool {
         .parent()
         .map(Path::to_path_buf)
         .into_iter()
-        .chain(node_dir().cloned())
+        .chain(node_dir())
         .collect();
     let Ok(output) = Command::new(bin)
         .arg("--help")
@@ -391,31 +465,28 @@ pub fn known_dirs() -> Vec<PathBuf> {
 pub fn resolved_bin_dirs() -> Vec<PathBuf> {
     // Read, never probed: this runs on the spawn path, and `gh`'s slot is the
     // one here that can be empty because nothing has asked yet.
-    let gh = GH_PATH.read().unwrap().clone().flatten();
-    [CLAUDE_PATH.get(), CODEX_PATH.get(), PI_PATH.get()]
+    let gh = GH_PATH.peek().flatten();
+    [CLAUDE_PATH.peek(), CODEX_PATH.peek(), PI_PATH.peek()]
         .into_iter()
         .flatten()
-        .cloned()
         .chain(gh)
         .filter(|path| path.is_absolute())
         .filter_map(|path| path.parent().map(Path::to_path_buf))
-        .chain(node_dir().cloned())
+        .chain(node_dir())
         .collect()
 }
 
-static NODE_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+static NODE_DIR: Slot<Option<PathBuf>> = Slot::new();
 
 /// The `bin` holding a `node`, looked for exactly as the CLIs are but with no
 /// shell probe — a `node` only the shell knows about is one the child would
 /// see anyway if the shell's `PATH` were inherited, and it is not.
-fn node_dir() -> Option<&'static PathBuf> {
-    NODE_DIR
-        .get_or_init(|| {
-            search_path("node")
-                .or_else(|| search_known_dirs("node"))
-                .and_then(|node| node.parent().map(Path::to_path_buf))
-        })
-        .as_ref()
+fn node_dir() -> Option<PathBuf> {
+    NODE_DIR.get_or_init_with(|| {
+        search_path("node")
+            .or_else(|| search_known_dirs("node"))
+            .and_then(|node| node.parent().map(Path::to_path_buf))
+    })
 }
 
 /// The `PATH` for a child this app spawns: the inherited one, then `extra`,
@@ -563,6 +634,40 @@ fn is_executable(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The slot answers its own caller and refuses to cache over a forget that
+    /// landed while it was resolving — the reader installed the binary this
+    /// probe did not find, so publishing it would undo the recheck with a
+    /// reading older than it.
+    #[tokio::test]
+    async fn a_forget_mid_probe_refuses_the_answer() {
+        static SLOT: Slot<u8> = Slot::new();
+
+        let answered = SLOT
+            .get_or_init(async {
+                SLOT.forget();
+                7
+            })
+            .await;
+
+        assert_eq!(answered, 7, "the caller asked before the forget");
+        assert_eq!(SLOT.peek(), None, "and their answer must not be cached");
+    }
+
+    /// An answer is kept until it is thrown away, absence included — which is
+    /// the half `OnceLock` could not do.
+    #[tokio::test]
+    async fn an_answer_is_kept_until_it_is_forgotten() {
+        static SLOT: Slot<Option<u8>> = Slot::new();
+
+        assert_eq!(SLOT.get_or_init(async { None }).await, None);
+        // Resolved once: the second read must not run this future at all.
+        assert_eq!(SLOT.get_or_init(async { Some(1) }).await, None);
+
+        SLOT.forget();
+        assert_eq!(SLOT.get_or_init(async { Some(1) }).await, Some(1));
+        assert_eq!(SLOT.peek(), Some(Some(1)));
+    }
 
     /// The resolver must agree with the shell about where `claude` is. Skipped
     /// rather than failed where it isn't installed, so CI without the CLI stays

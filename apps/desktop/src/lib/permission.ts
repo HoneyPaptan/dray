@@ -41,6 +41,12 @@ const HONOURED: Partial<Record<Harness, ApprovalPolicy[]>> = {
   // exposes no per-session surface for it, so claiming `manual` here would
   // promise a gate Dray cannot set.
   opencode: ["plan", "auto"],
+  // Three, and the difference from opencode's two is `auto_approve`: Cline
+  // publishes it as a real per-session boolean beside its `plan`/`act` mode, so
+  // whether a session asks is something the composer can actually set rather
+  // than something the reader's own config decides. A bypass is absent because
+  // there is no wider setting to reach — it would be `auto` under another name.
+  cline: ["plan", "manual", "auto"],
 };
 
 /// The stance a harness actually runs when handed one it does not honour.

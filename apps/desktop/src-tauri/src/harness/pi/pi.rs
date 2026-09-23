@@ -26,7 +26,7 @@ pub mod rpc;
 
 use crate::events::{AgentEvent, AgentEventPayload, ApprovalPolicy, TurnStatus};
 use crate::harness::claude_code::permissions::PendingPermissions;
-use crate::harness::{read_stderr, record_failure, Harness::Pi};
+use crate::harness::{read_stderr_into, record_failure, Harness::Pi, StderrTail};
 use crate::models::{Effort, Model};
 use crate::session::{QueuedMessages, Session, StatusTracker, Transport};
 use crate::store::{self, next_seq_by_session_id};
@@ -203,6 +203,10 @@ pub async fn init(
     // then, which draws no ring rather than a wrong one.
     let context_window = Arc::new(AtomicU64::new(0));
 
+    // Shared with the stdout reader, which is where a death has to be explained
+    // and where the only copy of the reason is by then.
+    let stderr_tail = StderrTail::default();
+
     // The reader has to be running before the handshake: `get_state` is a
     // request, and nothing settles a pending request except a line off stdout.
     tokio::spawn({
@@ -216,6 +220,7 @@ pub async fn init(
         let seq = seq.clone();
         let pending = pending.clone();
         let context_window = context_window.clone();
+        let stderr_tail = stderr_tail.clone();
         let desk_id = session_id.clone();
         let teardown_app = app.clone();
         async move {
@@ -230,6 +235,7 @@ pub async fn init(
                 pending,
                 seq,
                 context_window,
+                stderr_tail,
                 app,
             )
             .await
@@ -251,9 +257,12 @@ pub async fn init(
         }
     });
 
-    tokio::spawn(async move {
-        if let Err(error) = read_stderr(Pi, stderr).await {
-            eprintln!("Failed to read pi stderr: {error}");
+    tokio::spawn({
+        let stderr_tail = stderr_tail.clone();
+        async move {
+            if let Err(error) = read_stderr_into(Pi, stderr, stderr_tail).await {
+                eprintln!("Failed to read pi stderr: {error}");
+            }
         }
     });
 
@@ -510,6 +519,7 @@ async fn read_stdout(
     pending: PendingPermissions,
     seq: Arc<AtomicU64>,
     context_window: Arc<AtomicU64>,
+    stderr_tail: StderrTail,
     app: AppHandle,
 ) -> Result<()> {
     let reader = BufReader::new(stdout);
@@ -681,13 +691,21 @@ async fn read_stdout(
     // startup, and this runs after a delete may have removed the file, where an
     // append would quietly recreate it.
     if status.lock().await.turn_in_flight() {
+        // stdout and stderr are drained by two tasks and a crashing child
+        // writes its reason to one and closes the other, in no fixed order, so
+        // reading the tail the instant stdout ends usually reads it empty. Long
+        // enough for the lines already in the pipe, short enough that a reader
+        // watching the turn fail does not notice the wait.
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
         let closed = mapper.synthesize(AgentEventPayload::TurnCompleted {
             status: TurnStatus::Error,
             stop_reason: None,
-            // The one sentence that names what happened. `Turn failed` alone is
-            // the fallback for an errored turn carrying no text, and this turn
-            // has a reason worth reading.
-            final_text: Some("pi stopped before the turn finished".to_string()),
+            // The sentence names what happened and the tail names *why*, which
+            // until now went only to this process's stderr — so a pi extension
+            // crashing on every turn read as pi simply stopping, and the stack
+            // trace saying which extension it was reached nobody.
+            final_text: Some(death_sentence(&stderr_tail)),
             // A child that went away, which no login fixes.
             auth_failed: false,
             usage: None,
@@ -702,6 +720,21 @@ async fn read_stdout(
     }
 
     Ok(())
+}
+
+/// What a turn ended by a dead child says.
+///
+/// The tail is quoted rather than summarised: it is somebody else's error
+/// message, and rewording one is how a reader is told something the child never
+/// said.
+fn death_sentence(tail: &StderrTail) -> String {
+    let opener = "pi stopped before the turn finished";
+    match tail.text() {
+        // Plain, not fenced: this row draws text rather than markdown, so a
+        // fence would reach the reader as three literal backticks.
+        Some(said) => format!("{opener}\n\n{said}"),
+        None => opener.to_string(),
+    }
 }
 
 #[cfg(test)]

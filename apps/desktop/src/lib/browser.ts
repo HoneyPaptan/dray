@@ -1,33 +1,30 @@
 import { call, subscribeEvent } from "@/lib/transport";
 import { useSyncExternalStore } from "react";
 
-
 /// The in-app browser's frontend half: tabs per session as the backend
-/// reports them, and the one rule about who presents the native view.
+/// reports them, and the frames it draws them with.
 ///
-/// Chromium draws straight into the window above the webview, so React
-/// cannot compose it. Two panes can show a session's browser — the Browser
-/// tab and the right panel's Live slot — and each *claims* the view with its
-/// rect; the highest-priority live claim wins and its rect goes to Rust. No
-/// claim, or a modal open, hides the view.
+/// The page is a headless Chromium on the machine running the runtime, and
+/// what arrives here is its screencast — one JPEG per change, over the same
+/// event pipe every other event takes, so the desktop pane and a phone draw
+/// it the same way. Input goes back as CDP's own events in device
+/// coordinates; the pane knows the size it asked for, so it owns the mapping.
 
 export type BrowserTab = {
   id: number;
   url: string;
   title: string;
-  favicon: string;
   loading: boolean;
   active: boolean;
-  canGoBack: boolean;
-  canGoForward: boolean;
-  /// The main frame's last load failure, from Chromium's own words.
-  error: string | null;
-  /// CEF's level: 0 is 100%, a step is ×1.2.
-  zoom: number;
 };
+
+/// One screencast frame: a data URL and the CSS size the page was laid out
+/// at when it was taken, which is what a pointer position is mapped onto.
+export type Frame = { src: string; width: number; height: number };
 
 const EMPTY: BrowserTab[] = [];
 const tabsBySession = new Map<string, BrowserTab[]>();
+const framesBySession = new Map<string, Frame>();
 const fetched = new Set<string>();
 const listeners = new Set<() => void>();
 let started = false;
@@ -52,94 +49,19 @@ function start() {
       pending.delete(sessionId);
       openErrors.delete(sessionId);
     }
+    if (tabs.length === 0) framesBySession.delete(sessionId);
     tabsBySession.set(sessionId, tabs);
     fetched.add(sessionId);
     notify();
   });
-  void subscribeEvent<{ sessionId: string; element: PickedElement | null }>("browser_pick", (e) => {
-    picking.delete(e.payload.sessionId);
-    notify();
-    pickHandler?.(e.payload.sessionId, e.payload.element);
-  });
-  // A ⌘-chord pressed inside the page. Chromium's view has focus, so the
-  // document never saw the key; re-raise it as a synthetic event, which is
-  // all `useHotkey` needs. Shifted letters arrive upper-cased, as a real
-  // event carries them.
-  void subscribeEvent<{ key: string; code: string; shift: boolean; alt: boolean; ctrl: boolean }>("cef_key", (e) => {
-    const { key, code, shift, alt, ctrl } = e.payload;
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: shift && key.length === 1 ? key.toUpperCase() : key,
-        code,
-        metaKey: true,
-        shiftKey: shift,
-        altKey: alt,
-        ctrlKey: ctrl,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-  });
-  // `dray browser screenshot` opening and closing its shutter. The view
-  // hides for the shot and the page's own still stands in its place, so the
-  // reflow the capture needs happens where nobody is looking. Nothing is
-  // drawn on top of that still: it is the page pixel for pixel, so the
-  // whole shot is invisible, which is the point.
-  void subscribeEvent<{ sessionId: string; shooting: boolean; shot: number }>("browser_shooting", (e) => {
-    shooting = e.payload.shooting ? e.payload.sessionId : null;
-    shot = e.payload.shot;
-    const winner = presenter();
-    // Nothing of this session's page is on screen, so there is no reflow to
-    // hide and nothing to wait for. Answered before `present`, which in
-    // that case does no work and would leave the shot waiting on a hide
-    // that is never going to happen.
-    if (shooting && (!shown || winner?.sessionId !== shooting)) shutterReady(shot);
-    present();
-    notify();
-  });
-  // Radix puts `pointer-events: none` on body while a modal is open — a
-  // menu as much as a dialog — and the native view would sit over one that
-  // lands on it. `childList` is a submenu portalling in later. The judging
-  // is deferred two frames, since the popper is placed a moment after the
-  // style lands and an unplaced menu measures off-screen.
-  new MutationObserver(() => {
-    const blocked = document.body.style.pointerEvents === "none";
-    if (blocked !== modalOpen) {
-      modalOpen = blocked;
-      occluded = null;
-      present();
-    }
-    judgeSoon();
-  }).observe(document.body, { attributes: true, attributeFilter: ["style"], childList: true });
-}
-
-/// Two frames on, so a popper just portalled in has been placed. Called
-/// from every change that could put the view under something: the body
-/// mutation, and a claim landing or moving while a modal is already up.
-function judgeSoon() {
-  if (modalOpen && !occluded) requestAnimationFrame(() => requestAnimationFrame(judgeOcclusion));
-}
-
-/// What a modal puts on screen: menus in their popper wrapper, dialogs by
-/// their full-window overlay. Anything else open is taken to cover the view.
-const OPEN_SURFACES = '[data-radix-popper-content-wrapper], [data-slot$="-overlay"]';
-
-/// Hides the view only where something open lands on it, so a menu opened
-/// elsewhere leaves the page live and untouched — the swap to a picture is
-/// visible on its own. Escalates only: a submenu closing does not bring the
-/// view back under the menu that stays.
-function judgeOcclusion() {
-  if (!modalOpen || occluded) return;
-  const view = presenter()?.rect;
-  if (!view) return;
-  const open = [...document.querySelectorAll(OPEN_SURFACES)];
-  occluded =
-    open.length === 0 ||
-    open.some((el) => {
-      const r = el.getBoundingClientRect();
-      return r.left < view.right && r.right > view.left && r.top < view.bottom && r.bottom > view.top;
-    });
-  present();
+  void subscribeEvent<{ sessionId: string; tab: number; data: string; width: number; height: number }>(
+    "browser_frame",
+    (e) => {
+      const { sessionId, data, width, height } = e.payload;
+      framesBySession.set(sessionId, { src: `data:image/jpeg;base64,${data}`, width, height });
+      notify();
+    },
+  );
 }
 
 function fetchTabs(sessionId: string) {
@@ -163,6 +85,12 @@ export function useBrowserTabs(sessionId: string | null): BrowserTab[] | null {
   );
 }
 
+/// The newest frame of the session's active tab, or `null` before one lands.
+export function useFrame(sessionId: string): Frame | null {
+  start();
+  return useSyncExternalStore(subscribe, () => framesBySession.get(sessionId) ?? null);
+}
+
 /// Why the last open in a session failed, or `null`. Held here rather than
 /// in the pane, so every route that opens — the URL bar, a local server
 /// row, a link in the chat — reports through one place, and the next open
@@ -171,14 +99,6 @@ const openErrors = new Map<string, string>();
 
 export function useOpenError(sessionId: string): string | null {
   return useSyncExternalStore(subscribe, () => openErrors.get(sessionId) ?? null);
-}
-
-/// For a caller that answers a failed open some other way — the link
-/// opener falls back to the system browser — so the pane does not later
-/// report a failure that was already handled.
-export function clearOpenError(sessionId: string) {
-  openErrors.delete(sessionId);
-  notify();
 }
 
 export function openInBrowser(sessionId: string, url: string, newTab = false) {
@@ -203,67 +123,58 @@ export function navigate(sessionId: string, action: "back" | "forward" | "reload
   return call("browser_nav", { sessionId, action });
 }
 
-export function zoom(sessionId: string, action: "in" | "out" | "reset") {
-  return call("browser_zoom", { sessionId, action });
+// --- The screencast ----------------------------------------------------------
+
+export type StageSize = { width: number; height: number; scale: number; touch: boolean };
+
+/// Who is drawing a session's page. Two mounts can — the panel's Browser tab
+/// and the full view — and only the one on screen claims; the screencast
+/// runs while anybody claims and stops a moment after the last claim goes.
+/// The moment is what lets one mount hand over to the other without the
+/// page going dark in between: the panel's release and the full view's
+/// claim land in one commit, and a stop sent on the release would race the
+/// start that follows it.
+const stages = new Map<string, { sessionId: string; size: StageSize }>();
+const stopTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export function claimStage(key: string, sessionId: string, size: StageSize) {
+  stages.set(key, { sessionId, size });
+  const timer = stopTimers.get(sessionId);
+  if (timer) {
+    clearTimeout(timer);
+    stopTimers.delete(sessionId);
+  }
+  void call("browser_watch", { sessionId, ...size }).catch(() => undefined);
 }
 
-export function openDevTools(sessionId: string) {
-  return call("browser_devtools", { sessionId });
+export function releaseStage(key: string) {
+  const claim = stages.get(key);
+  if (!claim) return;
+  stages.delete(key);
+  const { sessionId } = claim;
+  if ([...stages.values()].some((s) => s.sessionId === sessionId)) return;
+  stopTimers.set(
+    sessionId,
+    setTimeout(() => {
+      stopTimers.delete(sessionId);
+      if ([...stages.values()].some((s) => s.sessionId === sessionId)) return;
+      void call("browser_unwatch", { sessionId }).catch(() => undefined);
+    }, 300),
+  );
 }
 
-// --- Picking an element ------------------------------------------------------
-
-type PickedElement = {
-  url: string;
-  title: string;
-  selector: string;
-  tag: string;
-  text: string;
-  attrs: Record<string, string>;
-  rect: { x: number; y: number; width: number; height: number };
-  styles: { color: string; background: string; font: string };
-};
-
-const picking = new Set<string>();
-let pickHandler: ((sessionId: string, element: PickedElement | null) => void) | null = null;
-
-/// `App` installs the one handler, since what a pick *does* — land in the
-/// composer — needs the composer.
-export function setPickHandler(fn: typeof pickHandler) {
-  pickHandler = fn;
-}
-
-export function usePicking(sessionId: string): boolean {
-  return useSyncExternalStore(subscribe, () => picking.has(sessionId));
-}
-
-export function pickElement(sessionId: string, on: boolean) {
-  if (on) picking.add(sessionId);
-  else picking.delete(sessionId);
-  notify();
-  return call("browser_pick", { sessionId, start: on });
-}
-
-/// The block a pick appends to the draft: enough for the agent to find the
-/// element in the source without a screenshot.
-export function describePick(el: PickedElement): string {
-  const attrs = Object.entries(el.attrs)
-    .filter(([k]) => k !== "class" || el.attrs.class.length < 80)
-    .map(([k, v]) => `${k}="${v}"`)
-    .join(" ");
-  const text = el.text ? ` "${el.text}"` : "";
-  return [
-    `Browser element: \`${el.selector}\` on ${el.url}`,
-    `<${el.tag}${attrs ? " " + attrs : ""}>${text} · ${el.rect.width}×${el.rect.height} at (${el.rect.x}, ${el.rect.y}) · ${el.styles.font} · ${el.styles.color} on ${el.styles.background}`,
-  ].join("\n");
+/// One CDP input event onto the session's active tab. Fire and forget: a
+/// pointer move that fails has nothing to report, and the next one is a
+/// frame away.
+export function sendInput(sessionId: string, method: string, params: Record<string, unknown>) {
+  void call("browser_input", { sessionId, method, params }).catch(() => undefined);
 }
 
 // --- The pending new tab -----------------------------------------------------
 
-/// A new tab is nothing until it has a URL: no Chromium browser is made for
-/// it, so the pane can draw its own empty state where the page would be
-/// (the page is a native view the DOM cannot draw over). One per session,
-/// and it turns into a real tab the moment one arrives.
+/// A new tab is nothing until it has a URL: no page is opened for it, so
+/// the pane draws its own empty state where the page would be. One per
+/// session, and it turns into a real tab the moment one arrives.
 const pending = new Set<string>();
 
 export function usePendingTab(sessionId: string): boolean {
@@ -314,176 +225,38 @@ export function setViewport(sessionId: string, viewport: Viewport | null) {
   notify();
 }
 
-// --- Presenting the native view ---------------------------------------------
+// --- Mapping the pane onto the page ------------------------------------------
 
-type Claim = { priority: number; sessionId: string; rect: DOMRectReadOnly };
-const claims = new Map<string, Claim>();
-let modalOpen = false;
-/// Something open lands on the view: `null` until judged for this modal,
-/// cleared with it, so this alone says whether the view hides. A view not
-/// yet on screen waits for the judgement; one already up stays up, since
-/// hiding it and bringing it back is the flash this exists to remove.
-let occluded: boolean | null = null;
-let shown = false;
-let lastSession: string | null = null;
-
-/// A picture of the page drawn in the native view's place while a modal has
-/// it hidden, or the pane is a hole for as long as a menu is open. `url` is
-/// `null` where the capture failed: the view still hides, over nothing.
-/// One object per capture, and callbacks compare against it: two menus in
-/// a row over an unchanged page capture the same URL, so a URL cannot tell
-/// the first capture's late fallback from the second's image.
-export type Snapshot = { sessionId: string; url: string | null };
-let snapshot: Snapshot | null = null;
-let capturing = false;
-
-/// The session whose page `dray browser screenshot` is photographing, or
-/// `null`. The capture lays the page out at the asked-for size, which is a
-/// visible reflow in the pane the reader is watching — so the view hides
-/// for the shot and the page's own still is drawn in its place. The still
-/// is what makes it a cover rather than a hole: the shutter opens *before*
-/// the override lands, so what is photographed is the page as the reader
-/// last saw it, and the swap is invisible.
-let shooting: string | null = null;
-/// Which shot that is, as `browser_shooting` numbered it.
-let shot = 0;
-
-/// Whether the native view is off screen: a modal landed on it, or a shot
-/// is under way on the session presenting it. One predicate, because the
-/// still, the paint callback and the layout call must all agree about it —
-/// they each asked `occluded` separately before, which left a shot drawing
-/// a still nothing would hide behind.
-function hiding(): boolean {
-  if (occluded) return true;
-  const winner = presenter();
-  return !!winner && shooting === winner.sessionId;
+/// CDP's modifier bitmask.
+export function modifiersOf(e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): number {
+  return (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
 }
 
-export function useBrowserSnapshot(sessionId: string): Snapshot | null {
-  return useSyncExternalStore(subscribe, () => (snapshot?.sessionId === sessionId ? snapshot : null));
+/// A pointer position inside the drawn frame, in the page's own CSS pixels.
+/// The frame may be drawn smaller than the page was laid out at — a preset
+/// wider than the pane is clamped — so the ratio is taken from the drawn
+/// box, never assumed to be one. Clamped to the page, since a pointer
+/// released just past the edge still ends the press it started.
+export function pagePoint(
+  client: { x: number; y: number },
+  box: { left: number; top: number; width: number; height: number },
+  page: { width: number; height: number },
+): { x: number; y: number } {
+  const sx = box.width > 0 ? page.width / box.width : 1;
+  const sy = box.height > 0 ? page.height / box.height : 1;
+  const x = Math.min(page.width, Math.max(0, (client.x - box.left) * sx));
+  const y = Math.min(page.height, Math.max(0, (client.y - box.top) * sy));
+  return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 };
 }
 
-/// Captured *before* the view hides, so the pane never blanks; a menu over
-/// the page lands a few frames late instead. Capped so a stuck capture
-/// cannot leave that menu under the view. WebKit keeps no decoded cache for
-/// a data URL, so the hide waits on the mounted `<img>` itself, with a
-/// fallback clock for a pane that never mounts one.
-function captureSnapshot(sessionId: string) {
-  capturing = true;
-  const timeout = new Promise<null>((r) => setTimeout(() => r(null), 400));
-  void Promise.race([call<string>("browser_snapshot", { sessionId }), timeout])
-    .catch(() => null)
-    .then((url) => {
-      capturing = false;
-      if (!hiding()) return;
-      const taken: Snapshot = { sessionId, url };
-      snapshot = taken;
-      notify();
-      if (url) setTimeout(() => snapshotPainted(taken), 500);
-      else present();
-    });
-}
-
-/// The pane's image is decoded: two frames on so it has painted, then hide.
-export function snapshotPainted(of: Snapshot) {
-  if (snapshot !== of || !hiding()) return;
-  requestAnimationFrame(() => requestAnimationFrame(present));
-}
-
-/// A pane says "I am showing this session's browser here". `null` withdraws.
-export function claimPresenter(key: string, claim: Claim | null) {
-  if (claim) claims.set(key, claim);
-  else claims.delete(key);
-  present();
-  judgeSoon();
-}
-
-function presenter(): Claim | null {
-  let winner: Claim | null = null;
-  for (const c of claims.values()) {
-    if (c.rect.width > 0 && c.rect.height > 0 && (!winner || c.priority > winner.priority)) winner = c;
-  }
-  return winner;
-}
-
-function present() {
-  const winner = presenter();
-  if (winner && modalOpen && occluded === null && !shown) return;
-  // A shot hides the view the same way a modal does, and only for the
-  // session being photographed: another session's page is not reflowing.
-  const hidden = hiding();
-  if (winner && !hidden) {
-    shown = true;
-    lastSession = winner.sessionId;
-    const r = winner.rect;
-    // The picture stays until the view is back over it, or the pane is a
-    // hole for the round trip.
-    const held = snapshot;
-    void call("browser_layout", {
-      sessionId: winner.sessionId,
-      x: r.left,
-      y: r.top,
-      width: r.width,
-      height: r.height,
-      visible: true,
-    })
-      .catch(() => undefined)
-      .then(() => {
-        if (held && snapshot === held && !hiding()) {
-          snapshot = null;
-          notify();
-        }
-      });
-  } else if (lastSession) {
-    // Read now, not when the hide answers: by then the shot this hide is
-    // for may be over and `shot` may name the next one.
-    const covering = shot;
-    // Hold the view up until its picture is in; the capture calls back here.
-    if (hidden && winner && !snapshot) {
-      if (!capturing) captureSnapshot(winner.sessionId);
-      return;
-    }
-    shown = false;
-    // Nothing claims the view, so nothing is drawing the still either — the
-    // pane that was is gone. Dropped here because the only other place that
-    // clears one is the view coming *back*, which for a withdrawn pane
-    // never happens: the picture would sit in memory until the next shot
-    // replaced it. Never where a winner remains, since there the still is
-    // what is on screen.
-    if (!winner && snapshot) {
-      snapshot = null;
-      notify();
-    }
-    void call("browser_layout", {
-      sessionId: lastSession,
-      x: 0,
-      y: 0,
-      width: 0,
-      height: 0,
-      visible: false,
-    })
-      .catch(() => undefined)
-      // The shot is held until here, so it photographs a page the reader
-      // is no longer looking at. Answered after the hide lands, never
-      // before: the whole point is that the reflow happens off screen.
-      .then(() => shutterReady(covering));
-  }
-}
-
-/// Tells shot `of` the page is covered. Also the answer when there is
-/// nothing to cover — no pane presenting this session, so no reflow anybody
-/// can see — since otherwise every screenshot taken with the browser tab
-/// shut would sit out the full timeout for a cover it never needed.
-///
-/// **Which shot is named, and it has to be.** One shot is answered twice
-/// where the pane has nothing to cover: once here, and again when the hide
-/// it asked for lands. Unnumbered, that spare answer released the *next*
-/// shot before its own still was painted — the reflow, back on screen every
-/// other capture. The number is captured where the answer is promised, not
-/// read when it arrives, so a hide finishing after its shot is over names
-/// the shot it belonged to and releases nothing.
-function shutterReady(of: number) {
-  void call("browser_shutter_ready", { shot: of }).catch(() => undefined);
+/// What a soft keyboard's text field changed, as the keys that would have
+/// done it: delete the tail the two values disagree on, then type the new
+/// one. Android's IME rewrites the whole word as it corrects, so the field's
+/// text is compared rather than trusting the input event's `data`.
+export function diffInput(prev: string, next: string): { del: number; add: string } {
+  let p = 0;
+  while (p < prev.length && p < next.length && prev[p] === next[p]) p++;
+  return { del: prev.length - p, add: next.slice(p) };
 }
 
 /// What the URL bar opens. A scheme is taken as written; `host:port` looks

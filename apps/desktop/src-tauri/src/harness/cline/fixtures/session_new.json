@@ -1,0 +1,111 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "sessionId": "1790170444239_5TFYm_cli",
+    "modes": {
+      "availableModes": [
+        {
+          "id": "plan",
+          "name": "Plan",
+          "description": "Explore the codebase and plan changes without modifying files"
+        },
+        {
+          "id": "act",
+          "name": "Act",
+          "description": "Make changes to the codebase"
+        }
+      ],
+      "currentModeId": "act"
+    },
+    "models": {
+      "availableModels": [
+        {
+          "modelId": "xiaomi/mimo-v2.6-flash",
+          "name": "MiMo-V2.6-Flash"
+        },
+        {
+          "modelId": "xiaomi/mimo-v2.6-pro",
+          "name": "MiMo-V2.6-Pro"
+        },
+        {
+          "modelId": "x-ai/grok-4.7",
+          "name": "Grok 4.7"
+        }
+      ],
+      "currentModelId": "anthropic/claude-sonnet-5"
+    },
+    "configOptions": [
+      {
+        "type": "select",
+        "id": "provider",
+        "name": "Provider",
+        "description": "The authentication provider to use",
+        "category": "model",
+        "currentValue": "cline",
+        "options": [
+          {
+            "value": "cline",
+            "name": "Cline Usage-Billing"
+          },
+          {
+            "value": "cline-pass",
+            "name": "ClinePass"
+          },
+          {
+            "value": "openai-codex",
+            "name": "OpenAI ChatGPT Subscription"
+          }
+        ]
+      },
+      {
+        "type": "select",
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "currentValue": "anthropic/claude-sonnet-5",
+        "options": [
+          {
+            "value": "xiaomi/mimo-v2.6-flash",
+            "name": "MiMo-V2.6-Flash"
+          },
+          {
+            "value": "xiaomi/mimo-v2.6-pro",
+            "name": "MiMo-V2.6-Pro"
+          },
+          {
+            "value": "x-ai/grok-4.7",
+            "name": "Grok 4.7"
+          }
+        ]
+      },
+      {
+        "type": "select",
+        "id": "mode",
+        "name": "Session Mode",
+        "description": "Controls whether the agent can modify files",
+        "category": "mode",
+        "currentValue": "act",
+        "options": [
+          {
+            "value": "plan",
+            "name": "Plan",
+            "description": "Explore the codebase and plan changes without modifying files"
+          },
+          {
+            "value": "act",
+            "name": "Act",
+            "description": "Make changes to the codebase"
+          }
+        ]
+      },
+      {
+        "type": "boolean",
+        "id": "auto_approve",
+        "name": "Auto-approve tools",
+        "description": "Automatically approve all tool calls without asking for permission",
+        "currentValue": false
+      }
+    ]
+  }
+}

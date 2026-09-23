@@ -244,17 +244,25 @@ export default function Chat({
   // Told apart by the type `block_start` declared, not by content — thinking
   // deltas are plain text on the wire. Only one block streams at a time, so at
   // most one of these is non-empty.
-  const streamingText = streamingBlock?.type === "text" ? streamingBlock.text : "";
+  // A preview is a claim about a turn in flight, so it may not outlive one.
+  // The state is cleared when the turn ends, and this is the other half: a
+  // reconnect that finds the session already finished corrects the status and
+  // never sees the event that would have retired the row, so the row has to
+  // follow the status rather than wait to be told. Derived rather than another
+  // clearing site, so an exit nobody has thought of yet is covered too.
+  const streaming = busy ? streamingBlock : null;
+
+  const streamingText = streaming?.type === "text" ? streaming.text : "";
   const streamingThinking =
-    streamingBlock?.type === "thinking" ? streamingBlock.text : "";
+    streaming?.type === "thinking" ? streaming.text : "";
 
   // A tool call the model is still composing. Unlike the two above this is
   // non-empty from the first frame — the block announces its tool before any
   // argument arrives, and having only the name is exactly the case the preview
   // exists to cover.
   const streamingTool =
-    streamingBlock?.type === "tool_use" && streamingBlock.name
-      ? { name: streamingBlock.name, partialJson: streamingBlock.text }
+    streaming?.type === "tool_use" && streaming.name
+      ? { name: streaming.name, partialJson: streaming.text }
       : null;
 
   // Kept a string rather than a boolean: the scroll-pin effect below takes this
@@ -623,7 +631,14 @@ export default function Chat({
           ref={scrollRef}
           onScroll={onScroll}
           onWheel={onWheel}
-          className="h-full overflow-y-auto"
+          // `overflow-x` computes to `auto` beside a scrolling `overflow-y`, so
+          // without the clip anything wider than this column — a card with a
+          // width of its own, a long unbreakable path — lets the whole
+          // transcript pan sideways, which on a phone reads as the screen
+          // breaking. Clipped rather than scrolled: everything here that is
+          // genuinely wider than the column (code, diffs, a `<pre>`) carries its
+          // own horizontal scroller, so the page has nothing left to pan for.
+          className="h-full overflow-y-auto overflow-x-clip"
         >
           <div ref={contentRef} className="mx-auto flex max-w-3xl flex-col gap-4 px-6 py-6">
             {shownTurns.map((turn) => (

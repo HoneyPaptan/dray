@@ -145,6 +145,7 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
         accepts_images: false,
         secondary: true,
         supports_fast: false,
+        free: false,
     })
 }
 
@@ -279,6 +280,7 @@ fn fold(rows: Vec<Row>) -> Vec<Model> {
                 // tier, which is its own answer rather than the lookup happening
                 // to miss for want of a `…-build-fast-build-fast`.
                 supports_fast: !twin && ids.iter().any(|id| id == &format!("{}{FAST_SUFFIX}", row.model_id)),
+                free: false,
             }
         })
         .collect()
@@ -333,6 +335,7 @@ pub fn fallback() -> Vec<Model> {
         accepts_images: false,
         secondary,
         supports_fast,
+        free: false,
     };
 
     vec![

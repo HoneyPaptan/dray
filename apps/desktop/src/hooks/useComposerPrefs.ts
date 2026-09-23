@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 
 import { useLocalStorage } from "@/hooks/useLocalStorage";
-import type { ModelByHarness } from "@/lib/model";
+import { AGENT_SLOTS, isDrawnSlot, type ModelByHarness } from "@/lib/model";
 import type { ApprovalPolicy, Effort, Harness, ModelId } from "@/types/events";
 
 /// Seeds for a first run with nothing stored. Once the user picks anything, their
@@ -12,6 +12,7 @@ import type { ApprovalPolicy, Effort, Harness, ModelId } from "@/types/events";
 /// right for one of them.
 const SEED: ComposerPrefs = {
   harness: "claude_code",
+  agentProvider: null,
   modelByHarness: {},
   effortByModel: {},
   permissionMode: "auto",
@@ -31,6 +32,10 @@ type ComposerPrefs = {
   /// Which agent a new session starts on. Sticky like the rest of this row —
   /// somebody who works in Codex should not re-pick it every time.
   harness: Harness;
+  /// The provider that agent is narrowed to, where a slot in the picker's row
+  /// draws one — OpenRouter is pi with its own mark, not a harness of its own.
+  /// `null` is the agent whole, which is every other slot.
+  agentProvider: string | null;
   /// Keyed by harness, because a harness cannot run the other's models at all.
   /// One id here was the whole of the bug it replaced: switching agent and back
   /// found a pick the new list could not run and fell to whatever led it.
@@ -60,7 +65,15 @@ export function useComposerPrefs() {
 
   // Merged over the seed on read, so a record written by an older build that
   // lacks a key gets the seed for it rather than `undefined` reaching a picker.
-  const merged: ComposerPrefs = { ...SEED, ...prefs };
+  const stored: ComposerPrefs = { ...SEED, ...prefs };
+
+  // An agent the row no longer draws is repaired on the way out, never left to
+  // the picker: the thumb would fall back to the first slot while the send went
+  // on spawning the agent nobody can see. Repaired on read rather than written
+  // back, so a build that draws it again finds the pick intact.
+  const merged: ComposerPrefs = isDrawnSlot(stored.harness, stored.agentProvider)
+    ? stored
+    : { ...stored, harness: AGENT_SLOTS[0].harness, agentProvider: AGENT_SLOTS[0].provider };
 
   const patch = useCallback(
     (next: Partial<ComposerPrefs>) => setPrefs((prev) => ({ ...SEED, ...prev, ...next })),

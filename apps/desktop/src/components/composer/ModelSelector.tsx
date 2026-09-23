@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Sliders } from "lucide-react";
 import AgentIcon, { ProviderIcon } from "@/components/AgentIcon";
 import ModelLibraryDialog from "@/components/composer/ModelLibraryDialog";
+import { FreeMark } from "@/components/composer/FreeMark";
 import { useAgentAvailability } from "@/hooks/useAgentAvailability";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 import {
   byProvider,
   defaultStars,
   FX_STARS_SEEDED_KEY,
+  modelName,
+  namesProvider,
   STARRED_MODELS_KEY,
   topLevel,
   underMore,
@@ -18,6 +21,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -30,14 +34,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { compactTokens, resetTime } from "@/lib/format";
+import { compactTokens, money, resetTime } from "@/lib/format";
 import { usePlanUsage } from "@/hooks/usePlanUsage";
 import { modelTokens, type PlanLimit, type SessionUsage } from "@/lib/usage";
 import { call } from "@/lib/transport";
 import { cn } from "@/lib/utils";
 import { offersFast } from "@/lib/fastMode";
 import { CAN_HOVER } from "@/lib/phoneLayout";
-import { FX_PROVIDERS, HARNESS_ORDER, isUnsetModel } from "@/lib/model";
+import { AGENT_SLOTS, FX_PROVIDERS, isUnsetModel, OPENROUTER, slotOf, type AgentSlot } from "@/lib/model";
 import type { Effort, Harness, Model, ModelId, PlanWindow } from "@/types/events";
 
 const EFFORT_LABELS: Record<Effort, string> = {
@@ -65,8 +69,18 @@ const AGENT_LABELS: Record<Harness, string> = {
   // Lowercase, which is how the project writes its own name everywhere its CLI
   // prints it.
   opencode: "opencode",
+  // Capitalised, which is how the project writes its own name.
+  cline: "Cline",
 };
-const AGENTS = HARNESS_ORDER.map((id) => ({ id, label: AGENT_LABELS[id] }));
+
+/// The name of a slot that narrows an agent to one provider. Every other slot
+/// is named after its agent, so this holds only the ones that are not.
+const SLOT_LABELS: Record<string, string> = { [OPENROUTER]: "OpenRouter" };
+
+const AGENTS = AGENT_SLOTS.map((slot) => ({
+  ...slot,
+  label: SLOT_LABELS[slot.id] ?? AGENT_LABELS[slot.harness],
+}));
 
 /// Next effort level for `model`, wrapping — what ⌘⇧E lands on. `null`
 /// where the model offers nothing to cycle, so the chord no-ops rather than
@@ -282,7 +296,7 @@ function UsageNote({ usage }: { usage: SessionUsage }) {
       {costUsd !== null && (
         <p className="flex items-baseline justify-between gap-3">
           <span>Cost</span>
-          <span className="shrink-0 tabular-nums">${costUsd.toFixed(2)}</span>
+          <span className="shrink-0 tabular-nums">{money(costUsd)}</span>
         </p>
       )}
 
@@ -305,7 +319,8 @@ function UsageNote({ usage }: { usage: SessionUsage }) {
 /// readable at rest rather than only while the menu is open.
 export default function ModelSelector({
   harness,
-  onHarnessChange,
+  agentProvider,
+  onSlotChange,
   canSwitchHarness,
   models,
   modelId,
@@ -324,7 +339,11 @@ export default function ModelSelector({
   cwd = null,
 }: {
   harness: Harness;
-  onHarnessChange: (harness: Harness) => void;
+  /// The provider the agent is narrowed to, where a slot draws one. `models` is
+  /// already narrowed to it by the time it reaches here — the slot is a way of
+  /// looking at an agent, not a second list to keep in step.
+  agentProvider: string | null;
+  onSlotChange: (slot: AgentSlot) => void;
   /// The agent is the child process, so it is fixed once a session exists. The
   /// row of icons goes with it; the trigger's own mark stays, since naming the
   /// agent a session runs is worth a glyph whether or not it can change.
@@ -438,7 +457,9 @@ export default function ModelSelector({
   const providerGroups = useMemo(() => byProvider(listed), [listed]);
 
   const selected = models.find((m) => m.id === modelId) ?? null;
-  const activeAgent = AGENTS.findIndex((a) => a.id === harness);
+  // The slot in force, not the harness: two marks can name one agent, and the
+  // thumb has to sit under the one that is actually drawing the list.
+  const activeAgent = AGENTS.findIndex((a) => a.id === slotOf(harness, agentProvider).id);
   // fx lists one provider at a time, so every row shares its provider — the
   // active one, which is what the segmented control marks. A pending switch
   // wins so the thumb moves at once; `undefined` before the first read, or when
@@ -555,7 +576,8 @@ export default function ModelSelector({
               at all — a flex item's floor is its content otherwise — and the
               effort beside it keeps its width, being the shorter word and the
               one a reader is comparing down the column. */}
-          <span className="min-w-0 truncate">{model.label}</span>
+          <span className="min-w-0 truncate">{modelName(model)}</span>
+          <FreeMark model={model} />
           {rowEffort(model) && (
             <span className="shrink-0 text-muted-foreground/60">
               {EFFORT_LABELS[rowEffort(model)!]}
@@ -593,7 +615,8 @@ export default function ModelSelector({
         className="text-ui"
         onSelect={() => onChange(model.id, null)}
       >
-        <span className="min-w-0 truncate">{model.label}</span>
+        <span className="min-w-0 truncate">{modelName(model)}</span>
+        <FreeMark model={model} />
         {model.id === modelId && <Check className="ml-auto size-3.5 shrink-0" />}
       </DropdownMenuItem>
     );
@@ -616,18 +639,34 @@ export default function ModelSelector({
               type="button"
               variant="ghost"
               size="sm"
-              className="gap-1 px-1.5 text-ui text-muted-foreground"
+              // `min-w-0` is what lets the name below give way. Without it the
+              // button's own content is its floor, so a model whose name runs
+              // long — pi lists a few, and the opencode bridge's are the
+              // longest — widens the whole toolbar and pushes the controls
+              // beside it off a phone's screen.
+              className="min-w-0 gap-1 px-1.5 text-ui text-muted-foreground"
             >
-              <AgentIcon harness={harness} brand className="size-3.5" />
+              <AgentIcon harness={harness} brand className="size-3.5 shrink-0" />
               {/* Effort is a qualifier on the model, not part of its name, so it's
                   held back a step rather than reading as one long label. */}
               {/* The unset sentinel is not a name and there is no name to
                   draw, so the placeholder stands in. pi is the one harness
                   that reaches this: Dray names no default for it, and the
                   spawn omits the flag so pi's own settings decide. */}
-              <span>{selected?.label ?? (isUnsetModel(modelId) ? "Select Model" : modelId)}</span>
+              {/* The name is the one part here that may be any length, so it is
+                  the one part that gives way. Every qualifier beside it keeps
+                  its width: they are short, and a clipped "Fast" says something
+                  different from no "Fast" at all. */}
+              {/* A hard cap as well as `min-w-0`: shrinking only happens where
+                  the row is already constrained, and on a wrapping phone row
+                  it is not — so an id like `opencode-cli/opencode/big-pickle`
+                  took a whole line to itself. The cap is what makes the
+                  truncation certain rather than circumstantial. */}
+              <span className="max-w-[11rem] min-w-0 truncate">
+                {selected ? modelName(selected) : isUnsetModel(modelId) ? "Select Model" : modelId}
+              </span>
               {effort && (
-                <span className="text-muted-foreground/60">{EFFORT_LABELS[effort]}</span>
+                <span className="shrink-0 text-muted-foreground/60">{EFFORT_LABELS[effort]}</span>
               )}
               {/* The second qualifier on the model, drawn exactly like the
                   first: its *presence* is what says fast mode is on, so colour
@@ -635,7 +674,7 @@ export default function ModelSelector({
                   competes with the yellow the sidebar spends on sessions
                   wanting the reader. A glyph was the other try; among two words
                   it read as a badge stuck on the label. */}
-              {fast && <span className="text-muted-foreground/60">Fast</span>}
+              {fast && <span className="shrink-0 text-muted-foreground/60">Fast</span>}
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -658,13 +697,19 @@ export default function ModelSelector({
         // that one harness for no reason a reader could see. Rows truncate.
         //
         // **The agent track is what sets the number, not the rows.** It is the
-        // one thing here that cannot truncate: six marks at `size-6` are 144px
-        // before the ⌘/Shift/A caps beside them, and at 200px the chord's last
-        // cap was clipped by the menu's edge. 8 (menu `p-1`) + 8 (track `p-1`)
-        // + 144 + 4 (`gap-1`) + 86 (three caps at `gap-1`, "Shift" spelled out)
-        // = 250. A seventh agent costs another 24 and wants this raised again —
-        // or the hint dropped, which is what the fx arm below already does.
-        className="w-[256px]"
+        // one thing here that cannot truncate: a mark is `size-6`, so five are
+        // 120px before the ⌘/Shift/A caps beside them, and at 200px the chord's
+        // last cap was clipped by the menu's edge. 8 (menu `p-1`) + 8 (track
+        // `p-1`) + 120 + 4 (`gap-1`) + 86 (three caps at `gap-1`, "Shift"
+        // spelled out) = 226. Every slot added costs another 24, and at eight
+        // the width has to rise again — or the hint be dropped, which is what
+        // the fx arm below already does.
+        // Capped at 60% of the window as well as at Radix's own
+        // available height, which on a phone is the whole screen above
+        // the composer — a menu reaching the top edge reads as a page
+        // rather than as a picker, and leaves nothing of the transcript
+        // behind it. Rows scroll inside it.
+        className="max-h-[min(60vh,var(--radix-dropdown-menu-content-available-height))] w-[min(280px,calc(100vw-1rem))]"
         // The trigger is also the tooltip trigger, so Radix returning focus to
         // it on close reopens the tooltip on that focus and leaves it stuck
         // until the next click. Don't refocus the trigger — the composer takes
@@ -700,23 +745,31 @@ export default function ModelSelector({
                     hover and left Claude — which carries its own rust — sitting
                     at one state forever. Opacity is the one dial both marks
                     answer to. */}
-                {AGENTS.map((agent) => {
+                {AGENTS.map((agent, index) => {
                   const missing = availability?.some(
-                    (a) => a.harness === agent.id && !a.available,
+                    (a) => a.harness === agent.harness && !a.available,
                   );
                   return (
                     <button
                       key={agent.id}
                       type="button"
                       role="radio"
-                      aria-checked={agent.id === harness}
+                      aria-checked={index === activeAgent}
                       aria-label={
                         missing ? `${agent.label} (not installed)` : agent.label
                       }
-                      onClick={() => onHarnessChange(agent.id)}
+                      onClick={() => onSlotChange(agent)}
                       className="relative flex size-6 items-center justify-center rounded-sm opacity-55 transition-opacity hover:opacity-100 aria-checked:opacity-100"
                     >
-                      <AgentIcon harness={agent.id} brand className="size-3.5" />
+                      {/* A slot that narrows an agent draws the *provider's*
+                          mark, not the agent's: two identical marks side by
+                          side say nothing about which is which, and what the
+                          reader is picking here is the catalogue. */}
+                      {agent.provider ? (
+                        <ProviderIcon provider={agent.provider} className="size-3.5" />
+                      ) : (
+                        <AgentIcon harness={agent.harness} brand className="size-3.5" />
+                      )}
                       {/* Marked, not disabled. Disabling leaves nowhere to say
                           why — a tooltip is the only slot left, and the cure is
                           two lines and two buttons. Picking it is what draws the
@@ -776,9 +829,14 @@ export default function ModelSelector({
             models needs to know which is which. A one-provider list — fx, or
             any harness with a single vendor — draws its rows flat, the heading
             naming what the agent mark on the trigger already said. */}
-        {shortlisted && providerGroups.length > 1 && !blanked
-          ? providerGroups.map((group) => (
+        {shortlisted && (providerGroups.length > 1 || namesProvider(shown)) && !blanked
+          ? providerGroups.map((group, i) => (
               <div key={group.provider}>
+                {/* A rule between providers, none above the first. A muted
+                    heading reads as one more row until you look at it, so with
+                    several providers shortlisted the lists ran together — the
+                    divider is what says one provider's models ended. */}
+                {i > 0 && <DropdownMenuSeparator />}
                 <p className="px-2 pt-1.5 pb-0.5 text-ui text-muted-foreground">
                   {group.provider}
                 </p>

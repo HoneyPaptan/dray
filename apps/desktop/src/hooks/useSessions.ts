@@ -1,6 +1,7 @@
 import { call, IS_REMOTE, subscribeEvent } from "@/lib/transport";
 import { remote } from "@/lib/remoteTransport";
 import { open } from "@tauri-apps/plugin-dialog";
+import { pickFolder } from "@/lib/folderPicker";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { restoreAttachments } from "@/hooks/useAttachments";
 import { useComposerPrefs, type EffortByModel } from "@/hooks/useComposerPrefs";
@@ -16,7 +17,8 @@ import { dropHeld, heldFor, holdEarlyEvent } from "@/lib/earlyEvents";
 import { fastFor, fastNotice } from "@/lib/fastMode";
 import { isWindowFocused, onFocusChange } from "@/lib/focus";
 import { reconcileStatuses } from "@/lib/liveStatus";
-import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, usableEffort, usableFxModel, usableModel } from "@/lib/model";
+import { STARRED_MODELS_KEY } from "@/lib/starredModels";
+import { DEFAULT_MODEL_FOR, fxListFor, isUnsetModel, landedFxModel, rememberedModel, seededFxModel, slotModels, slotProviderOf, usableEffort, usableFxModel, usableModel, usableSlotModel, type AgentSlot } from "@/lib/model";
 import { notifyOS } from "@/lib/notify";
 import { stanceFor } from "@/lib/permission";
 import { isProvisional, nextMainSeq, provisionalId, retireOldestProvisional } from "@/lib/provisional";
@@ -60,6 +62,13 @@ function readFxPicks(): Record<string, ModelId> {
 function recordFxPick(provider: string | undefined, id: ModelId): void {
   if (!provider || isUnsetModel(id)) return;
   writeLocalStorage(FX_PICK_KEY, { ...readFxPicks(), [provider]: id });
+}
+
+/// The reader's shortlist, read at the moment a repair needs it — a slot that
+/// narrows the list falls back to a model they starred, and a copy held here
+/// would drift from the picker's the first time the library dialog wrote one.
+function readStarred(): ModelId[] {
+  return readLocalStorage<ModelId[]>(STARRED_MODELS_KEY, []);
 }
 
 /// [`usableFxModel`] with the reader's stored picks read for it.
@@ -258,6 +267,11 @@ export function useSessions() {
     // Seeded once from prefs, then free to diverge: selecting a session overwrites
     // these with what that session was started with, which must not feed back.
     const [harness, setHarnessState] = useState<Harness>(() => prefs.harness);
+    // The provider the agent is narrowed to, where the picker's row draws a slot
+    // for one. Beside the harness rather than inside it: a slot is a way of
+    // looking at an agent, and the session it starts is an ordinary session of
+    // that agent — `send_msg` never hears about this.
+    const [agentProvider, setAgentProvider] = useState<string | null>(() => prefs.agentProvider);
     const [modelId, setModelId] = useState<ModelId>(() =>
       rememberedModel(prefs.modelByHarness, prefs.harness),
     );
@@ -353,8 +367,13 @@ export function useSessions() {
 // `fxListFor` for the bug that is.
 const models = useMemo(() => {
   const active = modelsByHarness[harness] ?? [];
-  return harness === "fx" ? fxListFor(readFxModelCache(), modelId, active) : active;
-}, [modelsByHarness, harness, modelId]);
+  const list = harness === "fx" ? fxListFor(readFxModelCache(), modelId, active) : active;
+  // Narrowed to the slot's provider where the row draws one. Here rather than
+  // in the picker alone, so everything reading the list downstream — the
+  // model's own row, its effort ladder, whether it takes a faster tier — is
+  // answered from the same list the menu offers.
+  return slotModels(list, agentProvider);
+}, [modelsByHarness, harness, modelId, agentProvider]);
 
 // What actually gets sent for the current model: its remembered pick, else its
 // own default, and null for a model that takes no effort flag at all.
@@ -407,8 +426,9 @@ const handleModelChange = (nextModelId: ModelId, nextEffort: Effort | null) => {
 // new harness cannot run, and its fallback is whatever leads the list, so
 // switching agent and back landed on Fable or Sol however deliberately the
 // reader had chosen otherwise.
-const setHarness = (next: Harness) => {
-  setHarnessState(next);
+const setSlot = (slot: AgentSlot) => {
+  setHarnessState(slot.harness);
+  setAgentProvider(slot.provider);
   // The remembered pick, taken as read — **not** repaired against the cached
   // list, however tempting that is for the one frame it would tidy up.
   //
@@ -418,8 +438,8 @@ const setHarness = (next: Harness) => {
   // validated *that* — the sentinel is in no list either — so the remembered
   // pick was gone for good. The fetch below repairs against the list it just
   // read, which is the only one that can answer.
-  setModelId(rememberedModel(prefs.modelByHarness, next));
-  setPrefs({ harness: next });
+  setModelId(rememberedModel(prefs.modelByHarness, slot.harness));
+  setPrefs({ harness: slot.harness, agentProvider: slot.provider });
 };
 
 // Wrapped rather than exported raw: picking a mode is a preference, and the
@@ -451,7 +471,13 @@ const setUseWorktree = (next: boolean | ((prev: boolean) => boolean)) => {
 // exactly where they started, with no project and no sentence saying why.
 const handleAttachProject = async (space: string | null = null) => {
   try {
-    const picked = await open({ directory: true, multiple: false });
+    // The phone browses the *desktop's* folders instead, and both halves of
+    // why are load-bearing: Android's dialog plugin implements no directory
+    // picker at all, and one that did would pick a folder on the phone, where
+    // a project has to be a directory on the machine the agent runs on.
+    const picked = IS_REMOTE
+      ? await pickFolder()
+      : await open({ directory: true, multiple: false });
     if (typeof picked !== "string") return;
 
     // Returns the list already sorted, so the attached project is at the front
@@ -1036,6 +1062,7 @@ const handleNewSession = () => {
   navGen.current++;
   setError(null);
   setHarnessState(prefs.harness);
+  setAgentProvider(prefs.agentProvider);
   // Repaired against the list on screen, not taken as read. The effect below
   // only fires when the harness *changes*, so a stored model left over from the
   // other harness would come back here untouched every time — and the harness
@@ -1087,6 +1114,11 @@ const restoreSessionControls = (item: SessionIndexItem) => {
   // The raw setter, like the rest of this function: a session's harness is the
   // session's, and clicking through old ones must not rewrite the default.
   setHarnessState(item.harness);
+  // Derived from the session's own model, not restored from a field: a slot is
+  // a way of looking at an agent and the index records none, where a pi model
+  // id names its provider outright. A provider no slot draws answers `null`,
+  // which is the agent's whole list.
+  setAgentProvider(slotProviderOf(item.harness, item.model));
   // A session indexed before the model was recorded, or one whose id this build
   // cannot name, reads back as the unset sentinel. Answered from the session's
   // own harness, since a model belongs to exactly one — and for a harness that
@@ -1590,7 +1622,7 @@ useEffect(() => {
       setModelId((current) =>
         harness === "fx"
           ? landedFxModel(readFxModelCache(), list, current, readFxPicks())
-          : usableModel(list, current, harness),
+          : usableSlotModel(list, current, harness, agentProvider, readStarred()),
       );
     })
     .finally(() => {
@@ -1600,7 +1632,7 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [harness, modelsGeneration])
+}, [harness, agentProvider, modelsGeneration])
 
 /// Drops whatever the harnesses cached and reads again.
 ///
@@ -2316,6 +2348,14 @@ useEffect(() => {
     // cleared from here rather than from each of them.
     if (status !== "in_progress") {
       setWorkingBySession((prev) => ({ ...prev, [sessionId]: null }));
+      // The streaming preview goes with it. It is normally retired by the
+      // committed event or by `block_stop`, and a turn that ends before either
+      // — an interrupt, a dead child, a harness that simply stops — left it
+      // behind: "Running a command" shimmering under a composer whose Stop
+      // button had already gone, which reads as a session that never finished.
+      // Cleared here for the same reason the wait above is, this being the one
+      // signal every exit passes through.
+      setStreamingContentBlock((prev) => (prev[sessionId] ? { ...prev, [sessionId]: null } : prev));
       // A request can only be answered by the child that asked, so one still
       // open when the turn ends is stranded rather than pending — see the
       // stranded-request note in CLAUDE.md. Dropping it here is what stops the
@@ -2573,6 +2613,6 @@ const contextUsage: { used: number; max: number } | null = (() => {
 // all, which is every harness but Claude Code.
 const usage = useMemo(() => sessionUsage(selectedSession?.events ?? []), [selectedSession?.events]);
 
-return {harness, setHarness, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, usage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, setCrewSeen, paneState, indexSide};
+return {harness, agentProvider, setSlot, sessions, selectedSessionId, selectedSession, streamingContentBlock, sessionIndexItems, statusBySession, askingSessions, archivedShown, archivedRequested: showArchived, setShowArchived, models, refreshModels, reloadModels, seedFxModels, loadingModels, modelId, effort, fast, setFast, fastNote, permissionMode, projects, projectPath, branches, branch, useWorktree, busy, working, backgroundTasks, liveTaskIds, tasksBySession, compacting, apiRetry, contextUsage, usage, error, setError, handleModelChange, setPermissionMode, handleAttachProject, handleSelectProject, handleRemoveProject, setProjectSpace, retagSpace, canAnnounce, handleSelectBranch, pendingBranch, setPendingBranch, runCheckout, setUseWorktree, handleSendMsg, handleInterrupt, handleStopTask, queuedMessages, handleCancelQueued, handleRespondPermission, handleAnswerQuestions, handleSelectSessionIndexItem, handleNewSession, markSessionUnread, setSessionFlags, forkSession, unlinkIssue, detachSession, deleteSession, removeWorktree, ensureLoaded, setOnScreen, setCrewSeen, paneState, indexSide};
 
 }

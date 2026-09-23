@@ -1336,6 +1336,14 @@
       overflow-y: auto;
     }
 
+    /* A list is not a question, and the rule above hands every dialog the
+       screen bar a hair — which on a phone read as a page that had replaced the
+       app, touching the top edge with nothing of the composer it was opened
+       from left behind it. Two thirds, and it still scrolls. */
+    [data-list-sheet] {
+      max-height: calc(var(--viewport-h, 100dvh) * 0.66) !important;
+    }
+
     /* Settings is the exception, and it is one because of what is in it: seven
        groups down a rail beside a panel of prose. Held to a card there is no
        width left for either, so here it is the screen. */
@@ -1378,6 +1386,17 @@
        the tap target with it. */
     [data-new-task] [contenteditable] {
       min-height: 4lh;
+    }
+
+    /* A phone's width does not hold every control on one line once a model
+       name, a project name and the worktree switch are all on it, and a flex
+       row left alone grows past the screen edge and takes the switch with it —
+       the reader sees a row cut at "Work" and nothing they can do about it.
+       Wrapping keeps every control reachable; the model name still truncates
+       on its own so one long id costs one row rather than two. */
+    [data-composer-toolbar] {
+      flex-wrap: wrap;
+      row-gap: 0.25rem;
     }
 
     /* The row under the composer is a cursor's worth of height per control.

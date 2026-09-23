@@ -10,6 +10,7 @@ import PermissionSelector, {
 import ProjectSelector from "@/components/composer/ProjectSelector";
 import WorktreeToggle from "@/components/composer/WorktreeToggle";
 import { Button } from "@/components/ui/button";
+import type { AgentSlot } from "@/lib/model";
 import ShortcutKeys from "@/components/ShortcutKeys";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SessionUsage } from "@/lib/usage";
@@ -26,7 +27,10 @@ import type {
 type ComposerToolbarProps = {
   /// Creation-time only, like project and branch: it decides which child runs.
   harness: Harness;
-  onHarnessChange: (harness: Harness) => void;
+  /// The provider the agent is narrowed to, where the picker's row draws a slot
+  /// for one.
+  agentProvider: string | null;
+  onSlotChange: (slot: AgentSlot) => void;
 
   models: Model[];
   modelId: ModelId;
@@ -98,7 +102,8 @@ type ComposerToolbarProps = {
 /// the caller's, since only the caller knows which side of it the row sits on.
 export default function ComposerToolbar({
   harness,
-  onHarnessChange,
+  agentProvider,
+  onSlotChange,
   models,
   modelId,
   effort,
@@ -158,7 +163,8 @@ export default function ComposerToolbar({
 
       <ModelSelector
         harness={harness}
-        onHarnessChange={onHarnessChange}
+        agentProvider={agentProvider}
+        onSlotChange={onSlotChange}
         canSwitchHarness={isNewSession}
         models={models}
         modelId={modelId}

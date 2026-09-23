@@ -3,6 +3,7 @@ import { Check, Copy } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { Button } from "@/components/ui/button";
+import { recheckAgents } from "@/hooks/useAgentAvailability";
 import type { AgentAvailability } from "@/types/events";
 
 const COPIED_MS = 1600;
@@ -35,6 +36,16 @@ const COPIED_MS = 1600;
 /// own docs point at. The link sits beside the button rather than behind it for
 /// the reader without `curl`, or wary of piping one into a shell.
 ///
+/// **Recheck rather than "restart Dray".** A resolution is cached for the life
+/// of the process, absence included, so an install run on this notice's own
+/// say-so changed nothing until the app was restarted — which nothing here said
+/// to do, so the notice sat over a CLI that was by then installed.
+/// [`recheckAgents`] throws that answer away. A successful one takes this
+/// notice off screen, which is the whole reply; one that still finds nothing
+/// says so in the sentence slot, since a button that redraws the same row reads
+/// as a broken button — the one thing a notice asking for an install cannot
+/// look like.
+///
 /// **The sentence is Rust's, and so is whether there are buttons at all.** An
 /// agent can be unavailable for a reason installing does not fix — a harness
 /// this build cannot drive yet — and offering an installer there sends the
@@ -42,6 +53,8 @@ const COPIED_MS = 1600;
 /// draws the sentence alone rather than a disabled pair.
 export default function AgentMissingNotice({ agent }: { agent: AgentAvailability }) {
   const [copied, setCopied] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [stillMissing, setStillMissing] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
@@ -59,15 +72,37 @@ export default function AgentMissingNotice({ agent }: { agent: AgentAvailability
     timer.current = setTimeout(() => setCopied(false), COPIED_MS);
   };
 
+  const recheck = async () => {
+    setChecking(true);
+    setStillMissing(false);
+    try {
+      const next = await recheckAgents();
+      const found = next?.find((a) => a.harness === agent.harness);
+      // A failed read answers `null`, which is no news about the machine — but
+      // it leaves the reader on this same notice either way, so it reads as
+      // the miss it is indistinguishable from.
+      if (!found?.available) setStillMissing(true);
+    } finally {
+      setChecking(false);
+    }
+  };
+
   return (
     <div className="mb-2 flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2">
-      <p className="min-w-0 flex-1 truncate text-ui text-foreground">{agent.reason}</p>
+      <p className="min-w-0 flex-1 truncate text-ui text-foreground">
+        {stillMissing
+          ? `Still no ${agent.label}. Dray looks where your login shell looks.`
+          : agent.reason}
+      </p>
 
       {agent.installCommand && agent.docsUrl && (
         <div className="flex shrink-0 items-center gap-1.5">
           <Button variant="secondary" size="sm" onClick={() => void copy()}>
             {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
             {copied ? "Copied" : "Copy command"}
+          </Button>
+          <Button variant="ghost" size="sm" disabled={checking} onClick={() => void recheck()}>
+            {checking ? "Looking…" : "Recheck"}
           </Button>
           <Button variant="ghost" size="sm" onClick={() => void openUrl(agent.docsUrl!)}>
             Install guide

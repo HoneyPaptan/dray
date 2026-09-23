@@ -14,6 +14,10 @@ use anyhow::{anyhow, Context, Result};
 /// behaviour. Plain `chromium` first: it is the one whose release cadence
 /// matches the protocol this app writes against, and a reader who has it
 /// almost certainly installed it on purpose.
+/// Device pixels per CSS pixel every session's browser renders at. Stated
+/// once here and read by the pane's cast, which caps what it asks for at it.
+pub const CAST_SCALE: u32 = 2;
+
 const CANDIDATES: &[&str] = &[
     "chromium",
     "chromium-browser",
@@ -98,6 +102,13 @@ pub async fn start(binary: &Path, profile: &Path) -> Result<Launched> {
         // one thing a screencast cannot survive.
         .arg("--disable-backgrounding-occluded-windows")
         .arg("--disable-renderer-backgrounding")
+        // The screencast is captured at the compositor's own scale and ignores
+        // `deviceScaleFactor` on the metrics override (measured: a 400-wide
+        // layout at factor 2 came back as 400 pixels), so a headless
+        // Chromium's frames are one pixel per CSS pixel — a blur on any phone.
+        // Two is the pane's own cap; a pane wanting fewer asks the cast for a
+        // smaller `maxWidth` and the frame is scaled down, never up.
+        .arg(format!("--force-device-scale-factor={CAST_SCALE}"))
         .kill_on_drop(true)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

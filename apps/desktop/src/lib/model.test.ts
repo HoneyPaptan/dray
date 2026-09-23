@@ -3,8 +3,13 @@ import {
   DEFAULT_MODEL_FOR,
   HARNESS_ORDER,
   isUnsetModel,
-  nextHarness,
+  nextSlot,
+  OPENROUTER,
   rememberedModel,
+  slotModels,
+  slotOf,
+  slotProviderOf,
+  usableSlotModel,
   UNSET_MODEL,
   usableEffort,
   usableFxModel,
@@ -206,28 +211,93 @@ describe("seededFxModel", () => {
   });
 });
 
-describe("nextHarness", () => {
+describe("nextSlot", () => {
   /// Toggling between two was written when there were two, and silently never
   /// reached the third. The chord steps the picker's own row instead.
-  it("steps through every harness in the picker's order and wraps", () => {
-    expect(HARNESS_ORDER).toEqual([
-      "claude_code",
-      "codex",
-      "pi",
-      "fx",
-      "grok",
-      "opencode",
-    ]);
-    expect(nextHarness("claude_code")).toBe("codex");
-    expect(nextHarness("codex")).toBe("pi");
-    expect(nextHarness("pi")).toBe("fx");
-    expect(nextHarness("fx")).toBe("grok");
-    expect(nextHarness("grok")).toBe("opencode");
-    expect(nextHarness("opencode")).toBe("claude_code");
+  it("steps through every slot in the picker's order and wraps", () => {
+    // fx, grok and pi are deliberately not drawn, and pi is still what the
+    // OpenRouter slot spawns — see [HARNESS_ORDER].
+    expect(HARNESS_ORDER).toEqual(["claude_code", "opencode", "cline", "codex"]);
+    const walk = (from: [string, string | null], to: string) =>
+      expect(nextSlot(from[0] as never, from[1]).id).toBe(to);
+
+    walk(["claude_code", null], "opencode");
+    walk(["opencode", null], "cline");
+    walk(["cline", null], "codex");
+    walk(["codex", null], OPENROUTER);
+    walk(["pi", OPENROUTER], "claude_code");
   });
 
   it("parks an unknown harness on the first", () => {
-    expect(nextHarness("other" as never)).toBe("claude_code");
+    expect(nextSlot("other" as never, null).id).toBe("claude_code");
+  });
+});
+
+describe("slotProviderOf", () => {
+  it("reads the slot off what the id opens with", () => {
+    expect(slotProviderOf("pi", "openrouter/anthropic/claude-opus-5" as never)).toBe(OPENROUTER);
+    // A pi provider no slot draws is pi's whole list.
+    expect(slotProviderOf("pi", "anthropic/claude-opus-5" as never)).toBe(null);
+    // Another harness never reaches pi's slots.
+    expect(slotProviderOf("fx", "openrouter/anthropic/claude-opus-5" as never)).toBe(null);
+  });
+});
+
+describe("slotOf", () => {
+  it("names the provider slot only where a slot draws that provider", () => {
+    expect(slotOf("pi", OPENROUTER).id).toBe(OPENROUTER);
+    // pi is drawn nowhere but OpenRouter, so anything else on it parks on the
+    // first slot — the same place the picker parks its thumb.
+    expect(slotOf("pi", null).id).toBe("claude_code");
+    expect(slotOf("pi", "anthropic").id).toBe("claude_code");
+    // Another harness's provider never reaches OpenRouter's slot, and a harness
+    // the row does not draw parks on the first slot rather than on that one.
+    expect(slotOf("fx", OPENROUTER).id).toBe("claude_code");
+    expect(slotOf("opencode", OPENROUTER).id).toBe("opencode");
+  });
+});
+
+describe("slotModels", () => {
+  const list = [model("openrouter/a", OPENROUTER), model("anthropic/b", "anthropic")];
+
+  it("narrows to the slot's provider, and leaves a whole slot whole", () => {
+    expect(slotModels(list, OPENROUTER).map((m) => m.id)).toEqual(["openrouter/a"]);
+    expect(slotModels(list, null)).toHaveLength(2);
+  });
+});
+
+describe("usableSlotModel", () => {
+  const list = [model("openrouter/a", OPENROUTER), model("anthropic/b", "anthropic")];
+
+  it("keeps a pick the provider serves", () => {
+    expect(usableSlotModel(list, "openrouter/a" as never, "pi", OPENROUTER, [])).toBe(
+      "openrouter/a",
+    );
+  });
+
+  it("drops a pick the provider does not serve, onto the reader's first star", () => {
+    expect(
+      usableSlotModel(list, "anthropic/b" as never, "pi", OPENROUTER, [
+        "openrouter/a" as never,
+      ]),
+    ).toBe("openrouter/a");
+  });
+
+  it("falls to the unset sentinel with nothing starred", () => {
+    expect(usableSlotModel(list, "anthropic/b" as never, "pi", OPENROUTER, [])).toBe(
+      UNSET_MODEL,
+    );
+  });
+
+  it("leaves the pick alone while the list is empty", () => {
+    expect(usableSlotModel([], "anthropic/b" as never, "pi", OPENROUTER, [])).toBe(
+      "anthropic/b",
+    );
+  });
+
+  it("is usableModel where the slot names no provider", () => {
+    const claude = [model("opus"), model("sonnet")];
+    expect(usableSlotModel(claude, "nope" as never, "claude_code", null, [])).toBe("opus");
   });
 });
 

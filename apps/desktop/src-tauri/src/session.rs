@@ -509,6 +509,9 @@ impl SessionManager {
             // exist depends on the reader's own providers, so nothing written
             // here could name them.
             Harness::Opencode => crate::harness::opencode::models::find(&model).await,
+            // Cline's too, and read off its own ACP session rather than a
+            // subcommand — see `harness/cline/models.rs`.
+            Harness::Cline => crate::harness::cline::models::find(&model).await,
             _ => Some(find_model(&model).with_context(|| format!("unknown model {model}"))?),
         };
 
@@ -1582,6 +1585,10 @@ pub enum Transport {
     /// id is opencode's own, minted at `session/new`. See
     /// [`OpencodeSession`](crate::harness::opencode::OpencodeSession).
     Opencode(crate::harness::opencode::OpencodeSession),
+    /// Cline's connection: ACP again, addressed by the id Cline minted at
+    /// `session/new` — it ignores `_meta.sessionId`, measured. See
+    /// [`ClineSession`](crate::harness::cline::ClineSession).
+    Cline(crate::harness::cline::ClineSession),
 }
 
 impl Transport {
@@ -1603,7 +1610,7 @@ impl Transport {
     pub fn one_prompt_per_turn(&self) -> bool {
         matches!(
             self,
-            Transport::Fx(_) | Transport::Grok(_) | Transport::Opencode(_)
+            Transport::Fx(_) | Transport::Grok(_) | Transport::Opencode(_) | Transport::Cline(_)
         )
     }
 
@@ -1619,6 +1626,9 @@ impl Transport {
             Transport::Grok(session) => Some(crate::harness::grok::start_turn(session, text).await),
             Transport::Opencode(session) => {
                 Some(crate::harness::opencode::start_turn(session, text).await)
+            }
+            Transport::Cline(session) => {
+                Some(crate::harness::cline::start_turn(session, text).await)
             }
             _ => None,
         }
@@ -1637,7 +1647,8 @@ impl Transport {
             | Transport::Pi(_)
             | Transport::Fx(_)
             | Transport::Grok(_)
-            | Transport::Opencode(_) => {
+            | Transport::Opencode(_)
+            | Transport::Cline(_) => {
                 bail!("this control is not wired for this harness")
             }
         }
@@ -1792,6 +1803,27 @@ impl Session {
                     effort,
                     permission_mode,
                     fast,
+                    cwd,
+                    session_cwd,
+                    is_new_session,
+                    app,
+                )
+                .await
+            }
+            Harness::Cline => {
+                // The same two refusals, and the same reasons: `cline --acp`
+                // has no `-w`, and nothing on its ACP surface copies a session.
+                if worktree_name.is_some() {
+                    bail!("cline cannot create a worktree — it has to be made first");
+                }
+                if fork_from.is_some() {
+                    bail!("cline sessions cannot be forked yet");
+                }
+
+                crate::harness::cline::init(
+                    &session_id,
+                    model.as_ref().map(|m| &**m),
+                    permission_mode,
                     cwd,
                     session_cwd,
                     is_new_session,
@@ -2082,6 +2114,14 @@ impl Session {
             return Ok(());
         }
 
+        // Cline's is opencode's, reply and all.
+        if let Transport::Cline(session) = &self.stdin {
+            let config = crate::harness::cline::set_model(session, model).await?;
+            self.model =
+                crate::harness::cline::landed_model(&config).unwrap_or_else(|| model.id.clone());
+            return Ok(());
+        }
+
         // grok's is the same request without fx's provider half — one vendor,
         // so there is nothing for a model to belong to but grok.
         if let Transport::Grok(session) = &self.stdin {
@@ -2201,6 +2241,11 @@ impl Session {
             return crate::harness::opencode::cancel(session);
         }
 
+        // Cline's, likewise.
+        if let Transport::Cline(session) = &self.stdin {
+            return crate::harness::cline::cancel(session);
+        }
+
         // pi never reaches here: its Stop goes through
         // [`pi::desk`](crate::harness::pi::desk), which is registered for the
         // life of the reader. Arriving means the desk has gone and the child
@@ -2258,6 +2303,15 @@ impl Session {
         // and cannot honour.
         if let Transport::Opencode(session) = &self.stdin {
             crate::harness::opencode::set_mode(session, mode).await?;
+            self.permission_mode = mode;
+            return Ok(());
+        }
+
+        // Cline's is two config writes rather than one — the mode, and whether
+        // the session asks at all — which is what lets `manual` mean something
+        // here that it cannot mean on opencode.
+        if let Transport::Cline(session) = &self.stdin {
+            crate::harness::cline::set_stance(session, mode).await?;
             self.permission_mode = mode;
             return Ok(());
         }
@@ -2331,6 +2385,14 @@ impl Session {
             }
             // opencode's is fx's envelope, built by the button the same way.
             (Transport::Opencode(session), Reply::Rpc(rpc_id)) => {
+                let outcome = chosen
+                    .decision
+                    .clone()
+                    .context("this option carries no outcome to send")?;
+                session.client.respond(*rpc_id, outcome)?;
+            }
+            // Cline's, likewise.
+            (Transport::Cline(session), Reply::Rpc(rpc_id)) => {
                 let outcome = chosen
                     .decision
                     .clone()
@@ -2494,6 +2556,14 @@ impl Session {
         // is asked to close rather than killed mid-write.
         if let Transport::Opencode(session) = &self.stdin {
             crate::harness::opencode::shutdown(&mut self.child, session).await;
+            return Ok(());
+        }
+
+        // Cline advertises no `session/close`, so this is EOF and a kill if it
+        // lingers — but it is still asked rather than killed outright, since
+        // the child is mid-write on a session it persists.
+        if let Transport::Cline(session) = &self.stdin {
+            crate::harness::cline::shutdown(&mut self.child, session).await;
             return Ok(());
         }
 

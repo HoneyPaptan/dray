@@ -39,6 +39,9 @@ export const DEFAULT_MODEL_FOR: Record<Harness, ModelId> = {
   // Multi-provider like pi and fx: 388 models on a machine with two providers
   // logged in, so anything named here could be one the reader has no key for.
   opencode: UNSET_MODEL,
+  // The same again: 308 models following whichever provider the reader signed
+  // in to, and its own settings already name one.
+  cline: UNSET_MODEL,
 };
 
 /// The providers `fx provider` takes, in fx's own words. Fixed by fx's CLI
@@ -201,21 +204,131 @@ export function usableEffort(
   return model.efforts[model.efforts.length - 1];
 }
 
-/// The agents in the order the picker draws them, which is also the order ⌘⇧A
-/// steps through. One list: a chord visiting a harness the row cannot show, or
+/// The agents the picker offers, in the order it draws them.
+///
+/// **A harness absent here still runs.** This list decides what the row *draws*;
+/// `Harness` is whole in Rust and a session already recorded on any of them
+/// spawns, resumes and streams as before. pi is the standing example — it is
+/// drawn nowhere and is what the OpenRouter slot below spawns.
+///
+/// fx, grok and pi were all drawn once and are not any more: the row is one
+/// pick a reader makes before they write a prompt, and four marks they use beat
+/// seven they scroll past. Dropping one costs the *pick*, never the sessions.
+///
+/// **opencode is drawn as an agent of its own, and the `opencode-pi` bridge is
+/// not drawn at all.** The bridge was the cheaper reading — one CLI to keep
+/// signed in for a catalogue pi already serves — and it cannot work: opencode's
+/// free tier answers **403 `FreeTierError`, "OpenCode's free tier can only be
+/// used from within OpenCode"**, to any turn whose agent has its tools denied,
+/// which is exactly what a model-proxy bridge is. Measured against opencode
+/// 1.18.30 — the same model and the same flags succeed with tools on and fail
+/// with them off — so no version of the bridge can serve those models, and the
+/// only way to reach them is opencode running as itself.
+export const HARNESS_ORDER: Harness[] = ["claude_code", "opencode", "cline", "codex"];
+
+/// The provider pi serves OpenRouter's catalogue under, spelled as pi spells it.
+export const OPENROUTER = "openrouter";
+
+/// One mark in the picker's agent row: an agent, or an agent narrowed to one of
+/// its providers.
+///
+/// A slot is not a harness. OpenRouter ships no CLI of its own — it is a
+/// catalogue pi already serves, and a pi model id names its provider
+/// (`openrouter/anthropic/claude-opus-5`) — so the slot spawns pi and narrows
+/// the list, where a `Harness` variant of its own would be a lie on the index
+/// and a second copy of every pi path in Rust.
+export type AgentSlot = {
+  id: string;
+  harness: Harness;
+  /// The provider the slot narrows to, `null` where it draws the agent whole.
+  /// Compared against a model's own `provider` field, which is pi's spelling.
+  provider: string | null;
+};
+
+/// The slots in the order the picker draws them, which is also the order ⌘⇧A
+/// steps through. One list: a chord visiting a slot the row cannot show, or
 /// skipping one it can, reads as the chord being broken.
-export const HARNESS_ORDER: Harness[] = [
-  "claude_code",
-  "codex",
-  "pi",
-  "fx",
-  "grok",
-  "opencode",
+///
+/// OpenRouter sits at the end, since it is the one entry here that names a
+/// catalogue instead of an agent — and it is the only reason pi is still
+/// spawned at all, pi being drawn nowhere in [`HARNESS_ORDER`].
+export const AGENT_SLOTS: AgentSlot[] = [
+  ...HARNESS_ORDER.map((harness) => ({ id: harness as string, harness, provider: null })),
+  { id: OPENROUTER, harness: "pi", provider: OPENROUTER },
 ];
 
-/// Where ⌘⇧A lands from `current`, wrapping. An unknown current steps onto the
-/// first, the same place the picker parks its thumb.
-export function nextHarness(current: Harness): Harness {
-  const i = HARNESS_ORDER.indexOf(current);
-  return HARNESS_ORDER[(i + 1) % HARNESS_ORDER.length];
+/// Whether the row actually draws this pairing.
+///
+/// A stored preference outlives the list: somebody who last started a session on
+/// fx, grok or pi keeps that harness in local storage after it stops being
+/// drawn, and nothing about the picker would say so — the thumb falls back to
+/// the first slot while the send still spawns the agent that is no longer
+/// there. So the composer repairs its own pick against this rather than trusting
+/// what was written.
+export function isDrawnSlot(harness: Harness, provider: string | null): boolean {
+  return AGENT_SLOTS.some((s) => s.harness === harness && s.provider === provider);
+}
+
+/// The slot a harness and provider name, falling to the harness's own whole
+/// slot — a provider no slot draws is a narrowing nothing in the row can show,
+/// so the thumb belongs under the agent itself.
+export function slotOf(harness: Harness, provider: string | null): AgentSlot {
+  return (
+    AGENT_SLOTS.find((s) => s.harness === harness && s.provider === provider) ??
+    AGENT_SLOTS.find((s) => s.harness === harness && s.provider === null) ??
+    AGENT_SLOTS[0]
+  );
+}
+
+/// Where ⌘⇧A lands from here, wrapping. An unknown slot steps onto the first,
+/// the same place the picker parks its thumb.
+export function nextSlot(harness: Harness, provider: string | null): AgentSlot {
+  // `findIndex`, not `slotOf`: an unrecognised pair answers -1 and parks on the
+  // first slot, where stepping from the slot `slotOf` fell back to would skip it.
+  const i = AGENT_SLOTS.findIndex((s) => s.harness === harness && s.provider === provider);
+  return AGENT_SLOTS[(i + 1) % AGENT_SLOTS.length];
+}
+
+/// The slot provider a pick belongs to, or `null` where no slot draws one.
+///
+/// Derived rather than stored, so a session opened from the sidebar lands on
+/// the slot its own model names: a pi id is `provider/model`
+/// (`openrouter/anthropic/claude-opus-5`), and the provider is the part before
+/// the first slash. A provider with no slot of its own answers `null`, which is
+/// the agent's whole list — the same answer as a harness that has no slots.
+export function slotProviderOf(harness: Harness, id: ModelId): string | null {
+  const opens = String(id).split("/")[0];
+  const slot = AGENT_SLOTS.find((s) => s.harness === harness && s.provider === opens);
+  return slot?.provider ?? null;
+}
+
+/// The list a slot draws: every model where it names no provider, that
+/// provider's alone where it does.
+export function slotModels(models: Model[], provider: string | null): Model[] {
+  return provider ? models.filter((m) => m.provider === provider) : models;
+}
+
+/// The pick once a slot's list has landed, narrowed to the slot's provider.
+///
+/// [`usableModel`]'s rule with one addition: a pick this provider does not
+/// serve is *not* the provider's business to keep, however runnable the harness
+/// finds it. A slot that narrows the list has to narrow the pick with it, or
+/// the trigger names a model no row in the menu offers — and the send runs it.
+/// `starred` is the reader's own order, so the fall-back is a model they chose
+/// rather than whichever row leads the list; nothing starred falls to the unset
+/// sentinel, which is pi picking for itself.
+export function usableSlotModel(
+  models: Model[],
+  picked: ModelId,
+  harness: Harness,
+  provider: string | null,
+  starred: ModelId[],
+): ModelId {
+  if (!provider) return usableModel(models, picked, harness);
+
+  const list = slotModels(models, provider);
+  if (list.length === 0 || list.some((m) => m.id === picked)) return picked;
+
+  const first = starred.find((id) => list.some((m) => m.id === id));
+  return first ?? UNSET_MODEL;
 }

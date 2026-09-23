@@ -315,6 +315,10 @@ pub fn providers_of(harness: Harness) -> Vec<ProviderChoice> {
         // drawn, not printed — so the sign-in form asks for none and
         // `opencode auth login` does the choosing in the terminal.
         Harness::Opencode => Vec::new(),
+        // Cline's three are named on its own handshake (`authMethods`), but
+        // signing into one is a browser flow its `cline auth` drives — so
+        // there is nothing for the form to ask first here either.
+        Harness::Cline => Vec::new(),
         Harness::Fx => FX_PROVIDERS
             .iter()
             .map(|(arg, _, label)| choice(arg, label))
@@ -448,6 +452,14 @@ pub fn auth_options(harness: Harness, provider: Option<&str>) -> Vec<AuthOption>
             Some("opencode providers login"),
             Some("Pick the provider in the terminal."),
         )],
+        // One flow, and the account is picked inside it: `cline auth` offers
+        // Cline, ClinePass and a ChatGPT subscription in its own chooser.
+        Harness::Cline => vec![option(
+            "login",
+            "Cline account",
+            Some("cline auth"),
+            Some("Pick the account in the terminal."),
+        )],
         Harness::Other(_) => Vec::new(),
     }
 }
@@ -460,6 +472,7 @@ async fn probe(harness: Harness, cwd: &str) -> anyhow::Result<Vec<Account>> {
         Harness::Fx => fx(cwd).await,
         Harness::Grok => grok().await,
         Harness::Opencode => opencode().await,
+        Harness::Cline => cline().await,
         // Nothing to ask: this build cannot name the CLI, let alone drive it.
         Harness::Other(_) => Ok(Vec::new()),
     }
@@ -1271,6 +1284,108 @@ struct OpencodeCredential {
     kind: Option<String>,
 }
 
+/// Who Cline is signed in as, read off its own settings file.
+///
+/// `~/.cline/data/settings/providers.json`, which is where `cline auth` writes
+/// — and a file rather than a probe because Cline publishes no status
+/// subcommand at all: `cline auth` opens a chooser, and asking over ACP would
+/// cost a child and an authenticated round trip to learn one row.
+///
+/// **Only the identity is read.** The same object holds an access token and a
+/// refresh token, and nothing here touches either.
+async fn cline() -> anyhow::Result<Vec<Account>> {
+    let path = std::env::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("no home directory to look for cline's settings in"))?
+        .join(".cline/data/settings/providers.json");
+
+    let raw = tokio::fs::read_to_string(&path).await;
+    // An unreadable file is **not** signed out, opencode's reading above: it may
+    // be perfectly good and merely unreachable for a moment, and a row claiming
+    // otherwise sends the reader to replace a credential that works.
+    let store: ClineProviders = match raw {
+        Ok(raw) => serde_json::from_str(&raw)
+            .map_err(|err| anyhow::anyhow!("couldn't read cline's settings file: {err}"))?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => ClineProviders::default(),
+        Err(err) => return Err(err.into()),
+    };
+
+    if store.providers.is_empty() {
+        return Ok(vec![Account {
+            provider: None,
+            label: "Cline".to_string(),
+            state: AccountState::LoggedOut,
+            detail: None,
+            auth_type: None,
+            can_sign_out: false,
+            can_change_method: false,
+        }]);
+    }
+
+    let mut rows: Vec<Account> = store
+        .providers
+        .into_iter()
+        .map(|(provider, entry)| {
+            let user = entry.settings.auth.metadata.user_info;
+            Account {
+                label: provider.clone(),
+                provider: Some(provider),
+                state: AccountState::LoggedIn,
+                // The email, then the name — whichever Cline recorded. A row
+                // naming neither still says the provider is signed in.
+                detail: user.email.or(user.name),
+                auth_type: Some("OAuth".to_string()),
+                // No subcommand signs one out, so the menu offers nothing.
+                can_sign_out: false,
+                can_change_method: false,
+            }
+        })
+        .collect();
+
+    // A map has no order of its own, and a row list that reshuffles between
+    // reads is one the reader cannot scan.
+    rows.sort_by(|a, b| a.label.cmp(&b.label));
+    Ok(rows)
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ClineProviders {
+    #[serde(default)]
+    providers: HashMap<String, ClineProvider>,
+}
+
+#[derive(serde::Deserialize)]
+struct ClineProvider {
+    #[serde(default)]
+    settings: ClineProviderSettings,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ClineProviderSettings {
+    #[serde(default)]
+    auth: ClineAuth,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ClineAuth {
+    #[serde(default)]
+    metadata: ClineAuthMetadata,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClineAuthMetadata {
+    #[serde(default)]
+    user_info: ClineUserInfo,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct ClineUserInfo {
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
 /// Signs one credential out, where the CLI can do it without a terminal.
 ///
 /// Three of the four can: `claude auth logout` and `codex logout` drop the one
@@ -1292,6 +1407,9 @@ pub async fn sign_out(harness: Harness, provider: Option<String>) -> Result<(), 
             let provider = provider.as_deref().ok_or("Which provider?")?;
             vec!["providers", "logout", provider]
         }
+        // Cline publishes no logout subcommand at all — `cline auth` is the
+        // whole surface — so the row offers none and this is unreachable.
+        Harness::Cline => return Err("Cline has no sign-out command.".to_string()),
         Harness::Fx => {
             let provider = provider.as_deref().ok_or("Which provider?")?;
             if !login_provider(harness, provider) {

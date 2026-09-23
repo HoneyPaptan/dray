@@ -940,6 +940,7 @@ mod tests {
             accepts_images: false,
             secondary: false,
             supports_fast: false,
+            free: false,
         }
     }
 

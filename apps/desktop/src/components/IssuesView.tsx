@@ -76,10 +76,6 @@ const ISSUE_SEARCH_INPUT_ID = "issues-search";
 /// here is worse than none.
 const LINEAR_KEYS_URL = "https://linear.app/settings/account/security";
 
-/// Linear's own MCP documentation. The setup is theirs and it changes, so this
-/// points at it rather than reproducing it.
-const LINEAR_MCP_URL = "https://linear.app/docs/mcp";
-
 /// Where GitHub's own instructions for signing `gh` in live. Linked rather
 /// than described, for the reason the Linear key link is: the flow is theirs to
 /// change.
@@ -760,27 +756,19 @@ function Connect({
           </p>
         )}
 
-        {/* The other half of the setup, and this is the place to say it. This
-            key is what fills *these* screens; it gives the agent nothing. An
-            agent that is to read an issue in full, or move one, needs Linear's
-            MCP server — and someone finding that out later, from a model
-            working off a one-line title, finds it out the expensive way. Said
-            here, while they are already setting this up, and said once.
+        {/* What the key reaches, said where it is being handed over. Dray's
+            own writes are two fields, so a reader giving it a personal key is
+            owed the scope in the same breath.
 
-            Linear's alone: GitHub's half of it is the `gh` CLI the agent
-            already has, and there is nothing to add. */}
+            It used to carry a second sentence pointing at Linear's MCP server,
+            on the reading that an agent wanting the full issue needs one. That
+            is a setup step for the reader's CLI, made nowhere near this pane
+            and undone nowhere near it either — so the line could only ever be
+            a claim about a machine this screen cannot see. Linear's alone in
+            any case: GitHub's half is the `gh` CLI the agent already has. */}
         {tracker === "linear" && (
           <p className="border-t border-border pt-3 text-ui text-muted-foreground">
             Dray reads your issues with this key, and writes only the status or priority you pick.
-            To let the agent read and manage issues in chat, add{" "}
-            <button
-              type="button"
-              className="text-foreground underline underline-offset-2 hover:text-foreground/80"
-              onClick={() => void openUrl(LINEAR_MCP_URL)}
-            >
-              Linear's MCP server
-            </button>{" "}
-            to your CLI.
           </p>
         )}
       </div>

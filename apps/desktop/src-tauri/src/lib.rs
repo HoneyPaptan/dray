@@ -205,6 +205,22 @@ async fn agent_availability() -> Vec<AgentAvailability> {
     out
 }
 
+/// Forgets where the agent CLIs are and answers the fresh reading.
+///
+/// The composer's notice names an install command, and running it changed
+/// nothing until the app was restarted: a resolution is cached for the life of
+/// the process, absence included, so the notice went on sitting over a CLI the
+/// reader had just installed. `recheck_gh` is the same button one pane over.
+///
+/// Answers the whole list rather than a bool like `recheck_gh`, since the
+/// caller is a store holding every agent's answer and a bool would send it
+/// straight back for the list anyway.
+#[tauri::command]
+async fn recheck_agents() -> Vec<AgentAvailability> {
+    binpath::forget_agents();
+    agent_availability().await
+}
+
 /// What to say about an agent that cannot run, and whether the install command
 /// is what fixes it.
 ///
@@ -281,6 +297,10 @@ async fn list_models(harness: Option<harness::Harness>) -> Vec<Model> {
         // the picker shows their starred shortlist and the library dialog the
         // rest. See `harness/opencode/models.rs`.
         harness::Harness::Opencode => harness::opencode::models::list().await,
+        // Cline's is an ACP probe rather than a subcommand — it publishes no
+        // `models` command, and a promptless session leaves no history for one
+        // to litter. See `harness/cline/models.rs`.
+        harness::Harness::Cline => harness::cline::models::list().await,
         other => models::models_for(other),
     }
 }
@@ -303,6 +323,7 @@ async fn refresh_models() {
     // opencode's is one `opencode models` away, and a reader refreshing has
     // just logged a provider in — which is exactly what changes that list.
     harness::opencode::models::forget();
+    harness::cline::models::forget();
 }
 
 /// Switches fx's active provider, which is what its model list is drawn from.
@@ -457,6 +478,9 @@ async fn list_slash_commands(cwd: &str, harness: Harness) -> Result<Vec<SlashCom
         Harness::Opencode => harness::opencode::commands::list_commands(cwd)
             .await
             .map_err(|e| e.to_string())?,
+        // Cline publishes no `available_commands_update` on any capture, so
+        // there is nothing to list and the picker draws its own empty state.
+        Harness::Cline => Vec::new(),
         Harness::Other(_) => Vec::new(),
     })
 }
@@ -806,6 +830,10 @@ pub fn run() {
             // The phone's way in. Same bargain as orchestration above: a port
             // that will not bind costs this feature and nothing else.
             serve::serve(app.handle().clone());
+            // The browser pane's events — tabs, frames — need a handle the
+            // backend has no other way to reach, since its callers are as
+            // often the CLI's verbs as the webview.
+            browser::install(app.handle().clone());
 
             Ok(())
         })
@@ -817,7 +845,16 @@ pub fn run() {
             refresh_models,
             set_fx_provider,
             agent_availability,
+            recheck_agents,
             browser::automation::browser_snapshot,
+            browser::pane::browser_tabs,
+            browser::pane::browser_open,
+            browser::pane::browser_activate,
+            browser::pane::browser_close,
+            browser::pane::browser_nav,
+            browser::pane::browser_watch,
+            browser::pane::browser_unwatch,
+            browser::pane::browser_input,
             local_servers::list_local_servers,
             get_settings,
             set_analytics_enabled,
@@ -835,6 +872,7 @@ pub fn run() {
             store::get_session_by_id,
             projects::list_projects,
             projects::add_project,
+            projects::list_folders,
             projects::remove_project,
             projects::set_last_selected_project,
             projects::set_project_space,

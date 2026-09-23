@@ -127,6 +127,7 @@ fn parse_model(line: &str) -> Option<Model> {
         // what the library dialog draws. pi's rule, pi's reason.
         secondary: true,
         supports_fast: false,
+        free: false,
     })
 }
 

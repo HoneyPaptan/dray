@@ -19,18 +19,21 @@ pub mod backend;
 pub mod cdp;
 #[path = "launch.rs"]
 pub mod launch;
+#[path = "pane.rs"]
+pub mod pane;
 
 use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
         atomic::{AtomicI32, Ordering},
-        Arc, LazyLock,
+        Arc, LazyLock, OnceLock,
     },
 };
 
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
+use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
 use cdp::Connection;
@@ -43,6 +46,22 @@ pub struct Tab {
     pub active: bool,
     pub url: String,
     pub title: String,
+}
+
+/// Where the pane's events go. Set once in `setup`; the backend has no handle
+/// of its own, since its callers are the CLI's verbs as often as the webview.
+static APP: OnceLock<AppHandle> = OnceLock::new();
+
+pub fn install(app: AppHandle) {
+    let _ = APP.set(app);
+}
+
+/// Emits to the webview, and through `serve` to every phone. Nothing before
+/// `install` has anywhere to go, which is only the live tests.
+pub(crate) fn emit(name: &str, payload: Value) {
+    if let Some(app) = APP.get() {
+        let _ = app.emit(name, payload);
+    }
 }
 
 /// Tab ids are minted across every session, not per browser.

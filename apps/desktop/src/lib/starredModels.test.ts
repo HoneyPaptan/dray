@@ -23,10 +23,15 @@ function model(id: string, over: Partial<Model> = {}): Model {
     provider: provider ?? "",
     acceptsImages: true,
     secondary: false,
+    free: false,
     supportsFast: false,
     ...over,
   };
 }
+
+/// Enough rows to earn a shortlist. pi's real answer is hundreds; the rule is
+/// a threshold, so a test about the shortlist has to be on the long side of it.
+const FILLER = Array.from({ length: 12 }, (_, i) => model(`xai/filler-${i}`));
 
 const XAI = model("xai/grok-4.6");
 const SPARK = model("openai-codex/gpt-5.3-codex-spark");
@@ -91,16 +96,24 @@ describe("topLevel", () => {
   /// while the chord walked every model every logged-in provider served, so a
   /// press switched to a model that was nowhere on screen.
   it("bounds pi by the reader's stars, not by secondary", () => {
-    const drawn = topLevel([XAI, SPARK, SOL], [SOL.id], "pi", XAI.id);
+    const drawn = topLevel([XAI, SPARK, SOL, ...FILLER], [SOL.id], "pi", XAI.id);
 
     expect(drawn.map((m) => m.id)).toEqual([XAI.id, SOL.id]);
     expect(drawn).not.toContain(SPARK);
   });
 
+  /// A slot narrowing pi to one provider answers with a handful, where a
+  /// shortlist is a setup step in front of a menu that already fitted.
+  it("draws a short list whole, stars or not", () => {
+    const drawn = topLevel([XAI, SPARK, SOL], [SOL.id], "pi", XAI.id);
+
+    expect(drawn.map((m) => m.id)).toEqual([XAI.id, SPARK.id, SOL.id]);
+  });
+
   /// pi's overflow is the library dialog, so a submenu there would be a second
   /// answer to a question the shortlist already answers.
   it("folds nothing under More for a shortlisted harness", () => {
-    expect(underMore([XAI, SPARK, SOL], "pi")).toEqual([]);
+    expect(underMore([XAI, SPARK, SOL, ...FILLER], "pi")).toEqual([]);
   });
 });
 

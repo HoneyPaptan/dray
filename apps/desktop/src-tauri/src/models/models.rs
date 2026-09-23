@@ -152,7 +152,9 @@ pub fn default_model_for(harness: Harness) -> Option<ModelId> {
         // opencode joins them: 388 models on the probe machine, spread across
         // every provider its reader has logged into, so a constant could only
         // name one they may not have.
-        Harness::Pi | Harness::Fx | Harness::Opencode => None,
+        // Cline joins them, and for the same reason: 308 models on the probe
+        // machine, following whichever provider the reader signed in to.
+        Harness::Pi | Harness::Fx | Harness::Opencode | Harness::Cline => None,
         // Single-vendor, unlike the two above, so a constant here names a model
         // every signed-in reader has. The list is still a probe — xAI ships
         // models faster than Dray does — and `grok::models::default_model`
@@ -217,6 +219,16 @@ pub struct Model {
     /// no error at all — so it follows the wire wherever the wire answers.
     #[serde(default)]
     pub supports_fast: bool,
+    /// Whether the model costs nothing to run.
+    ///
+    /// Follows the wire wherever the wire answers and is written to
+    /// under-match: a free row drawn without the mark costs a mark, where a
+    /// priced row drawn with one costs the reader money they were told they
+    /// would not spend. Cline is the only harness whose list says — its ids
+    /// carry OpenRouter's `:free` suffix — and every other row is left false
+    /// rather than guessed at from a name.
+    #[serde(default)]
+    pub free: bool,
 }
 
 impl Model {
@@ -238,6 +250,8 @@ impl Model {
             accepts_images: true,
             secondary: false,
             supports_fast: false,
+            // Both table-backed harnesses bill for every model they list.
+            free: false,
         }
     }
 
@@ -392,7 +406,9 @@ pub fn models_for(harness: Harness) -> Vec<Model> {
     match harness {
         Harness::ClaudeCode => claude_models(),
         Harness::Codex => codex_models(),
-        Harness::Pi | Harness::Fx | Harness::Grok | Harness::Opencode => Vec::new(),
+        Harness::Pi | Harness::Fx | Harness::Grok | Harness::Opencode | Harness::Cline => {
+            Vec::new()
+        }
         // Empty rather than a guess: this build cannot say what that harness
         // runs, and offering Claude's list would let a picker set a model the
         // session's own agent has never heard of.
@@ -420,7 +436,9 @@ pub fn runs_on(id: &ModelId, harness: Harness) -> bool {
     match harness {
         Harness::ClaudeCode => claude_models().iter().any(|m| &m.id == id),
         Harness::Codex => every_codex_model().iter().any(|m| &m.id == id),
-        Harness::Pi | Harness::Fx | Harness::Grok | Harness::Opencode => find_model(id).is_none(),
+        Harness::Pi | Harness::Fx | Harness::Grok | Harness::Opencode | Harness::Cline => {
+            find_model(id).is_none()
+        }
         // Nothing runs on a harness this build cannot spawn, and `false` is
         // the safe direction: it refuses a model rather than recording one
         // against a session that could never use it.

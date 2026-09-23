@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 
+import { FreeMark } from "@/components/composer/FreeMark";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,7 +11,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { byProvider, matchesQuery, toggleStar } from "@/lib/starredModels";
+import { byProvider, matchesQuery, modelName, namesProvider, toggleStar } from "@/lib/starredModels";
 import { cn } from "@/lib/utils";
 import type { Model, ModelId } from "@/types/events";
 
@@ -54,7 +55,8 @@ export default function ModelLibraryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Taller and wider than the settings dialog: this one is a list to scan,
           where that one is rows to read. */}
-      <DialogContent className="flex max-h-[70vh] max-w-120 flex-col gap-3 p-0">
+      <DialogContent data-list-sheet=""
+        className="flex max-h-[70vh] max-w-120 flex-col gap-3 p-0">
         <DialogHeader className="px-5 pt-5">
           <DialogTitle>Models</DialogTitle>
           <DialogDescription>
@@ -106,13 +108,17 @@ export default function ModelLibraryDialog({
             </p>
           )}
 
-          {groups.map((group) => (
-            <div key={group.provider} className="mb-1">
+          {groups.map((group, i) => (
+            <div
+              key={group.provider}
+              className={cn("mb-1", i > 0 && "mt-1 border-border border-t pt-1")}
+            >
               {/* Muted, no fill and no glyph, the sidebar's project heading:
                   a tinted band draws a box round the quietest line on screen.
-                  Drawn only when two providers share the list — fx serves one
-                  at a time, so its lone heading names what nothing disputes. */}
-              {groups.length > 1 && (
+                  Drawn where two providers share the list, and where the rows
+                  gave up their prefix: opencode's label is the whole route, so
+                  a stripped list has nowhere else to say who serves it. */}
+              {(groups.length > 1 || namesProvider(group.models)) && (
                 <p className="px-3 pt-2 pb-1 text-ui text-muted-foreground">
                   {group.provider}
                 </p>
@@ -133,7 +139,8 @@ export default function ModelLibraryDialog({
                     onClick={() => onStarredChange(toggleStar(starred, model.id))}
                     className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-ui hover:bg-accent"
                   >
-                    <span className="truncate">{model.label}</span>
+                    <span className="truncate">{modelName(model)}</span>
+                    <FreeMark model={model} />
                     {/* The id used to sit here, and for most models it is the
                         label again with a slash in it — the same name twice on
                         one row. The state is what the row is for, so it takes

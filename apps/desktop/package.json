@@ -15,7 +15,7 @@
     "install:app": "./scripts/install.sh",
     "icons": "./scripts/icons.sh",
     "dev:mobile": "vite --mode mobile --port 1421 --strictPort --host",
-    "build:mobile": "tsc && vite build --mode mobile --outDir dist-mobile"
+    "build:mobile": "node scripts/mobile-env.mjs && tsc && vite build --mode mobile --outDir dist-mobile"
   },
   "dependencies": {
     "@blobatar/react": "^2.5.0",
@@ -26,6 +26,7 @@
     "@streamdown/code": "^1.1.1",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "~2.7.2",
+    "@tauri-apps/plugin-fs": "~2.5.2",
     "@tauri-apps/plugin-opener": "^2",
     "blobatar": "^2.5.0",
     "class-variance-authority": "^0.7.1",

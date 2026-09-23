@@ -17,6 +17,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -43,8 +44,7 @@ const FORWARDED_EVENTS: &[&str] = &[
     "quit_requested",
     "transcription_download_progress",
     "browser_tabs",
-    "browser_pick",
-    "browser_shooting",
+    "browser_frame",
 ];
 
 const DEFAULT_PORT: u16 = 8787;
@@ -233,14 +233,52 @@ pub fn serve(app: AppHandle) {
         let app = app.clone();
         let token = token.clone();
         tauri::async_runtime::spawn(async move {
-            match TcpListener::bind(addr).await {
-                Ok(listener) => {
-                    eprintln!("[serve] listening on ws://{addr}");
-                    accept_loop(listener, app, token).await;
-                }
-                Err(e) => eprintln!("[serve] cannot bind {addr}: {e}"),
-            }
+            let listener = match wait_for_port(addr).await {
+                Some(listener) => listener,
+                None => return,
+            };
+            eprintln!("[serve] listening on ws://{addr}");
+            accept_loop(listener, app, token).await;
         });
+    }
+}
+
+/// How often a taken port is tried again.
+const REBIND_EVERY: Duration = Duration::from_secs(5);
+
+/// The listener for `addr`, waiting for the port if something else holds it.
+///
+/// A bind that failed once used to cost phone access for the life of the
+/// process, silently: another program of the reader's own held 8787, Dray said
+/// so in one line of stderr nobody reads, and the phone sat on a connect screen
+/// with no way to learn why. The port is fixed rather than moved because the
+/// mobile build bakes it in, so healing means waiting for it rather than
+/// choosing another.
+///
+/// Only "already in use" is waited on. Every other failure — a permission
+/// refusal, an address this machine no longer has — is a standing answer, and
+/// retrying it forever would be a loop that never ends and never says anything
+/// new.
+async fn wait_for_port(addr: SocketAddr) -> Option<TcpListener> {
+    let mut said = false;
+    loop {
+        match TcpListener::bind(addr).await {
+            Ok(listener) => return Some(listener),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                // Once, not every five seconds: this is an ordinary state on a
+                // machine running something else on the port, and a line per
+                // attempt would bury everything else in the log.
+                if !said {
+                    said = true;
+                    eprintln!("[serve] {addr} is taken, waiting for it: {e}");
+                }
+                tokio::time::sleep(REBIND_EVERY).await;
+            }
+            Err(e) => {
+                eprintln!("[serve] cannot bind {addr}: {e}");
+                return None;
+            }
+        }
     }
 }
 

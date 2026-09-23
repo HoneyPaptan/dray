@@ -231,6 +231,7 @@ fn row_to_model(row: &Value, efforts: Vec<Effort>) -> Option<Model> {
         // no flag, no settings key, and `set_model`/`set_session_name` are the
         // only setters its RPC answers.
         supports_fast: false,
+        free: false,
     })
 }
 

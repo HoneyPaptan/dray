@@ -21,6 +21,9 @@ pub mod grok;
 #[path = "opencode/opencode.rs"]
 pub mod opencode;
 
+#[path = "cline/cline.rs"]
+pub mod cline;
+
 pub mod rpc;
 
 use serde::{Deserialize, Serialize};
@@ -132,8 +135,55 @@ pub async fn record_failure(harness: Harness, session_id: &str, stage: &str, det
     }
 }
 
+/// How many of a child's last stderr lines are kept.
+///
+/// Enough for a node stack trace's first frames, which is where the name of the
+/// thing that broke sits, and short enough that the whole of it can be drawn as
+/// one paragraph in a transcript.
+const STDERR_TAIL_LINES: usize = 12;
+
+/// The last few lines a child said on stderr.
+///
+/// A child that dies takes its reason with it: the transcript gets Dray's own
+/// "stopped before the turn finished" and the actual cause goes to this
+/// process's stderr, which nobody running the app ever sees. So the tail is
+/// kept as it streams and read back when a death has to be explained — measured
+/// against a pi extension that crashed on every turn and said so in a stack
+/// trace the reader was never shown.
+#[derive(Clone, Default)]
+pub struct StderrTail(std::sync::Arc<Mutex<std::collections::VecDeque<String>>>);
+
+impl StderrTail {
+    /// What was kept, or `None` where the child said nothing.
+    pub fn text(&self) -> Option<String> {
+        let lines = self.0.lock().unwrap();
+        if lines.is_empty() {
+            return None;
+        }
+        Some(lines.iter().cloned().collect::<Vec<_>>().join("\n"))
+    }
+
+    fn push(&self, line: String) {
+        let mut lines = self.0.lock().unwrap();
+        if lines.len() == STDERR_TAIL_LINES {
+            lines.pop_front();
+        }
+        lines.push_back(line);
+    }
+}
+
 /// Copies the child's stderr to this process's, for logging only.
 pub async fn read_stderr(harness: Harness, stderr: tokio::process::ChildStderr) -> anyhow::Result<()> {
+    read_stderr_into(harness, stderr, StderrTail::default()).await
+}
+
+/// [`read_stderr`], keeping the tail for a caller that may have to explain a
+/// death with it.
+pub async fn read_stderr_into(
+    harness: Harness,
+    stderr: tokio::process::ChildStderr,
+    tail: StderrTail,
+) -> anyhow::Result<()> {
     use tokio::io::AsyncBufReadExt;
 
     let name = harness.wire_name();
@@ -142,6 +192,7 @@ pub async fn read_stderr(harness: Harness, stderr: tokio::process::ChildStderr) 
     while let Some(line) = lines.next_line().await? {
         if !line.trim().is_empty() {
             eprintln!("[{name} stderr] {line}");
+            tail.push(line);
         }
     }
 
@@ -387,8 +438,14 @@ mod install_tests {
     fn every_agent_names_its_own_cure() {
         for harness in Harness::ALL {
             assert!(!harness.label().is_empty());
+            // A copyable one-liner, and the *shape* is not pinned: the rule
+            // is each vendor's own installer, which for six of them is a
+            // piped script and for Cline is npm, that being the only route it
+            // publishes. Pinning `curl` would force a command its docs never
+            // give.
+            let install = harness.install_command();
             assert!(
-                harness.install_command().starts_with("curl -fsSL "),
+                install.starts_with("curl -fsSL ") || install.starts_with("npm i -g "),
                 "{:?} has no copyable install command",
                 harness
             );
@@ -472,6 +529,7 @@ pub enum Harness {
     Fx,
     Grok,
     Opencode,
+    Cline,
     /// A harness some other build named and this one has never heard of, with
     /// its spelling kept so a round trip does not lose it.
     ///
@@ -526,13 +584,14 @@ impl Harness {
     /// [`Harness::Other`] is deliberately absent: it is a value read off disk,
     /// never one to pick, so a picker or an availability read built from this
     /// cannot offer it.
-    pub const ALL: [Harness; 6] = [
+    pub const ALL: [Harness; 7] = [
         Harness::ClaudeCode,
         Harness::Codex,
         Harness::Pi,
         Harness::Fx,
         Harness::Grok,
         Harness::Opencode,
+        Harness::Cline,
     ];
 
     /// How the wire spells it — what `dray new --harness` takes and what an
@@ -554,6 +613,7 @@ impl Harness {
             Harness::Fx => "fx".to_string(),
             Harness::Grok => "grok".to_string(),
             Harness::Opencode => "opencode".to_string(),
+            Harness::Cline => "cline".to_string(),
             Harness::Other(name) => name.to_string(),
         }
     }
@@ -812,6 +872,23 @@ impl Harness {
                 forkable: false,
                 fork_needs_cli: false,
             },
+            // Model and stance both move on a live child, and the stance moves
+            // **further** than opencode's: `mode` is plan or act and
+            // `auto_approve` is a boolean beside it, so whether a session asks
+            // is a per-session setting rather than a line in the reader's own
+            // config file. No effort level exists to move, and no fast tier.
+            //
+            // Not forkable in v1: nothing on its ACP surface copies a session.
+            Harness::Cline => Capabilities {
+                creates_own_worktree: false,
+                applies_model_in_place: true,
+                applies_effort_in_place: false,
+                applies_permission_in_place: true,
+                fast_mode: FastMode::Unsupported,
+                expands_at_mentions: false,
+                forkable: false,
+                fork_needs_cli: false,
+            },
             // A session some other build wrote and this one cannot run. `false`
             // throughout: the row still draws, so the reader can see the session
             // is there and read its transcript, and `names_a_cli` is what stops
@@ -840,6 +917,7 @@ impl Harness {
             // installer call it — `grok` alone is the chat assistant.
             Harness::Grok => "Grok Build",
             Harness::Opencode => "opencode",
+            Harness::Cline => "Cline",
             // Its own spelling, the only thing known about it — and the honest
             // thing to put in a sentence, since the name a newer build wrote is
             // the one its reader will recognise.
@@ -871,6 +949,10 @@ impl Harness {
             Harness::Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
             Harness::Grok => "curl -fsSL https://x.ai/cli/install.sh | sh",
             Harness::Opencode => "curl -fsSL https://opencode.ai/install | bash",
+            // npm, against the rule the others follow, because it is the only
+            // route Cline publishes: its docs name `npm i -g cline` and there
+            // is no install script to prefer over it.
+            Harness::Cline => "npm i -g cline",
             // Empty, because there is nothing to install: the CLI is not what
             // is missing, this build is. A command guessed from the name would
             // be the one thing worse than no command.
@@ -890,6 +972,7 @@ impl Harness {
             Harness::Fx => "https://fx.sh/docs/getting-started/installation",
             Harness::Grok => "https://docs.x.ai/build/quickstart",
             Harness::Opencode => "https://opencode.ai/docs/",
+            Harness::Cline => "https://docs.cline.bot/cline-cli/overview",
             // Empty, so the notice draws no link rather than a wrong one: the
             // cure here is a newer Dray, not a CLI to install.
             Harness::Other(_) => "",
@@ -921,6 +1004,7 @@ impl Harness {
             // there is no browser to open. The plain form is the one to name.
             Harness::Grok => "grok login",
             Harness::Opencode => "opencode providers login",
+            Harness::Cline => "cline auth",
             // Nothing to log in to, for the same reason there is nothing to
             // install: this build cannot name the CLI, let alone drive it.
             Harness::Other(_) => "",
@@ -942,6 +1026,7 @@ impl Harness {
             Harness::Fx => &["login"],
             Harness::Grok => &["login"],
             Harness::Opencode => &["providers", "login"],
+            Harness::Cline => &["auth"],
             Harness::Other(_) => &[],
         }
     }
@@ -969,6 +1054,7 @@ impl Harness {
             | Harness::Codex
             | Harness::Grok
             | Harness::Opencode
+            | Harness::Cline
             | Harness::Other(_) => None,
         }
     }

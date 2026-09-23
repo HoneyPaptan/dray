@@ -98,6 +98,7 @@ fn resolve(id: &ModelId, discovered: &[Model]) -> Option<Model> {
         // `turn/start`, where an absent one only costs a model nobody has
         // heard of its speed.
         supports_fast: false,
+        free: false,
     })
 }
 
@@ -333,6 +334,7 @@ fn row_to_model(row: &Row) -> Model {
         accepts_images: accepts_images(row),
         secondary: false,
         supports_fast: supports_fast(row),
+        free: false,
     }
 }
 

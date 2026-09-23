@@ -300,3 +300,179 @@ mod tests {
         assert_eq!(basename("/"), "/");
     }
 }
+
+/// One directory the project browser can step into.
+///
+/// Absolute paths, unlike the Files view's [`crate::files::DirEntry`]: that one
+/// is a node in a tree rooted at a session's directory, where this walks from
+/// wherever the reader is and is handed straight to [`add_project`].
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct FolderEntry {
+    pub name: String,
+    pub path: String,
+    /// Whether the directory holds a `.git`, so the row that is almost always
+    /// the one being looked for says so. A worktree's is a file rather than a
+    /// directory, so presence is the test and not its kind.
+    pub is_repo: bool,
+}
+
+/// One listing, plus the two things a browser needs beside it.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "events.ts")]
+#[serde(rename_all = "camelCase")]
+pub struct FolderListing {
+    /// Canonical, so the path shown is the path attached — `add_project`
+    /// canonicalizes too, and two spellings of one directory is how the picker
+    /// ends up drawing "Attach project" over a project it just attached.
+    pub path: String,
+    /// `None` at the filesystem root, which is what removes the up row.
+    pub parent: Option<String>,
+    pub entries: Vec<FolderEntry>,
+}
+
+/// Directories under `path`, for picking a project on a machine the reader is
+/// not sitting at.
+///
+/// The phone cannot use a native folder picker for two separate reasons, and
+/// only the first is Android's: its dialog plugin implements none. The second
+/// survives that being fixed — a picker there chooses a directory on the
+/// *phone*, where a project has to be one on the machine the agent runs on. So
+/// the browsing happens over the transport, against this.
+///
+/// An empty `path` means the reader's home directory, which is both the
+/// sensible start and the only way the phone can learn where that is.
+///
+/// Directories alone: this picks a project, so a file is not a candidate and
+/// listing one is a row that cannot be pressed. Dot-directories go with them —
+/// `~` holds dozens and a project is not kept in one.
+#[tauri::command]
+pub async fn list_folders(path: String) -> Result<FolderListing, String> {
+    let target = if path.is_empty() {
+        std::env::home_dir().ok_or_else(|| "no home directory".to_string())?
+    } else {
+        std::path::PathBuf::from(&path)
+    };
+
+    // Before the read, so a path that resolves elsewhere is listed under the
+    // name it actually has — a symlink stepped into otherwise reports the link
+    // as its own location and the up row then climbs the wrong tree.
+    let target = tokio::fs::canonicalize(&target)
+        .await
+        .map_err(|e| format!("{}: {e}", target.display()))?;
+
+    let mut reader = tokio::fs::read_dir(&target)
+        .await
+        .map_err(|e| format!("{}: {e}", target.display()))?;
+
+    let mut entries = Vec::new();
+    while let Some(entry) = reader.next_entry().await.map_err(|e| e.to_string())? {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+
+        // The link's target, so a symlinked directory is offered like any
+        // other and a broken one is simply absent.
+        let full = entry.path();
+        if !tokio::fs::metadata(&full)
+            .await
+            .map(|meta| meta.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        entries.push(FolderEntry {
+            name,
+            is_repo: tokio::fs::symlink_metadata(full.join(".git")).await.is_ok(),
+            path: full.to_string_lossy().into_owned(),
+        });
+    }
+
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.name.cmp(&b.name)));
+
+    Ok(FolderListing {
+        parent: target
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned()),
+        path: target.to_string_lossy().into_owned(),
+        entries,
+    })
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    /// A directory of our own under the system temp dir. No `tempfile` here,
+    /// which is not a dependency; the name carries a uuid so two runs cannot
+    /// collide.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dray-folders-{tag}-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// Home is what an empty path means, and it is canonical — the phone has no
+    /// other way to learn where the reader's home is.
+    #[tokio::test]
+    async fn an_empty_path_lists_home() {
+        let listing = list_folders(String::new()).await.expect("home lists");
+        let home = tokio::fs::canonicalize(std::env::home_dir().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(listing.path, home.to_string_lossy());
+        assert!(listing.parent.is_some(), "home is not the filesystem root");
+    }
+
+    /// Files are not candidates and dot-directories are not where projects
+    /// live, so neither is drawn.
+    #[tokio::test]
+    async fn only_visible_directories_are_offered() {
+        let dir = scratch("visible");
+        tokio::fs::create_dir(dir.join("work")).await.unwrap();
+        tokio::fs::create_dir(dir.join(".cache")).await.unwrap();
+        tokio::fs::write(dir.join("notes.md"), "x").await.unwrap();
+
+        let listing = list_folders(dir.to_string_lossy().into_owned())
+            .await
+            .expect("lists");
+
+        let names: Vec<_> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["work"]);
+        assert!(!listing.entries[0].is_repo);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The mark is `.git` existing, whatever it is: a linked worktree's is a
+    /// file, so testing for a directory would leave every worktree unmarked.
+    #[tokio::test]
+    async fn a_repo_is_marked_whether_its_git_is_a_dir_or_a_file() {
+        let dir = scratch("repos");
+        tokio::fs::create_dir_all(dir.join("cloned/.git")).await.unwrap();
+        tokio::fs::create_dir(dir.join("tree")).await.unwrap();
+        tokio::fs::write(dir.join("tree/.git"), "gitdir: /elsewhere")
+            .await
+            .unwrap();
+
+        let listing = list_folders(dir.to_string_lossy().into_owned())
+            .await
+            .expect("lists");
+
+        assert_eq!(listing.entries.len(), 2);
+        assert!(listing.entries.iter().all(|e| e.is_repo));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A directory that is not there answers with the reason rather than an
+    /// empty list, which the picker would draw as a folder holding nothing.
+    #[tokio::test]
+    async fn a_missing_directory_is_an_error_not_an_empty_listing() {
+        assert!(list_folders("/nope/not/here".to_string()).await.is_err());
+    }
+}

@@ -67,15 +67,17 @@ page works, and two menus do not.
 
 > Create a key in Linear
 
-**Note under it**, above a rule — the other half of the setup
+**Note under it**, above a rule — what the key reaches
 
-> Dray reads your issues with this key, and writes only the status or priority you pick. To let the agent read and manage issues in chat, add [Linear's MCP server](https://linear.app/docs/mcp) to your CLI.
+> Dray reads your issues with this key, and writes only the status or priority you pick.
 
-Said here and only here. The key fills Dray's own screens and gives the agent
-nothing; someone who finds that out later finds it out from a model working off
-a one-line title, which is the expensive way. No check behind it — a live health
-check was built and removed, since this is setup advice rather than a fault to
-report.
+Scope, said where the key is handed over: Dray's own writes are two fields, so a
+reader is owed that in the same breath. It carried a second sentence pointing at
+Linear's MCP server, which is gone — that is a setup step for the reader's own
+CLI, made nowhere near this pane and undone nowhere near it, so the line could
+only be a claim about a machine this screen cannot see. A live health check
+behind it was built and removed earlier for the neighbouring reason: readers
+open this to read an issue, not to audit their tooling.
 
 Opens `https://linear.app/settings/account/security`. A link rather than
 instructions: the path through Linear's settings is theirs to change, and a

@@ -20,6 +20,7 @@ import {
   addAttachmentPaths,
   clearAttachments,
   pickAttachments,
+  useAttachError,
   removeAttachment,
   useAttachments,
 } from "@/hooks/useAttachments";
@@ -279,6 +280,7 @@ export default function ChatInput({
   const [recent, recordCommand] = useRecentCommands();
 
   const attachments = useAttachments(sessionId);
+  const attachError = useAttachError();
   // Set while the OS is dragging files over the window. Tauri intercepts the
   // native drop before the webview sees it, so there are no HTML drag events to
   // read here — `onDragDropEvent` is the only source, and it reports paths
@@ -907,6 +909,15 @@ export default function ChatInput({
             {/* Inside the card and above the text, so an attachment reads as part
                 of the message being composed rather than as a separate control.
                 Padded on the same edges as the textarea below it. */}
+            {/* One line, in the tray's own place. An upload refused in Rust —
+                a phone's bytes arriving short — otherwise pinned nothing and
+                said nothing, which reads as the button being broken. */}
+            {attachError && (
+              <p className={cn("pt-3 text-ui text-destructive", isNewTask ? "px-0" : "px-3")}>
+                {attachError}
+              </p>
+            )}
+
             {attachments.length > 0 && (
               <div className={cn("pt-3", isNewTask ? "px-0" : "px-3")}>
                 <AttachmentTray

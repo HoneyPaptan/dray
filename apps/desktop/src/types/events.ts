@@ -726,6 +726,36 @@ newText: string | null,
 unreadable: Unreadable | null, };
 
 /**
+ * One directory the project browser can step into.
+ *
+ * Absolute paths, unlike the Files view's [`crate::files::DirEntry`]: that one
+ * is a node in a tree rooted at a session's directory, where this walks from
+ * wherever the reader is and is handed straight to [`add_project`].
+ */
+export type FolderEntry = { name: string, path: string, 
+/**
+ * Whether the directory holds a `.git`, so the row that is almost always
+ * the one being looked for says so. A worktree's is a file rather than a
+ * directory, so presence is the test and not its kind.
+ */
+isRepo: boolean, };
+
+/**
+ * One listing, plus the two things a browser needs beside it.
+ */
+export type FolderListing = { 
+/**
+ * Canonical, so the path shown is the path attached — `add_project`
+ * canonicalizes too, and two spellings of one directory is how the picker
+ * ends up drawing "Attach project" over a project it just attached.
+ */
+path: string, 
+/**
+ * `None` at the filesystem root, which is what removes the up row.
+ */
+parent: string | null, entries: Array<FolderEntry>, };
+
+/**
  * Which agent runs a session.
  *
  * **Unknown spellings are kept, not refused.** `index.json` is a shared store
@@ -749,7 +779,7 @@ unreadable: Unreadable | null, };
  *
  * [`SessionIndexItem.unknown`]: crate::store::SessionIndexItem
  */
-export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok" | "opencode";
+export type Harness = "claude_code" | "codex" | "pi" | "fx" | "grok" | "opencode" | "cline";
 
 export type HookPhase = "started" | "finished";
 
@@ -1133,7 +1163,18 @@ secondary: boolean,
  * silently changes nothing — Codex accepts an unknown `serviceTier` with
  * no error at all — so it follows the wire wherever the wire answers.
  */
-supportsFast: boolean, };
+supportsFast: boolean, 
+/**
+ * Whether the model costs nothing to run.
+ *
+ * Follows the wire wherever the wire answers and is written to
+ * under-match: a free row drawn without the mark costs a mark, where a
+ * priced row drawn with one costs the reader money they were told they
+ * would not spend. Cline is the only harness whose list says — its ids
+ * carry OpenRouter's `:free` suffix — and every other row is left false
+ * rather than guessed at from a name.
+ */
+free: boolean, };
 
 /**
  * What an index entry records for a session's model.

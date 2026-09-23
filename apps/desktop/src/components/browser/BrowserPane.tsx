@@ -2,62 +2,60 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowLeft,
   ArrowRight,
-  Bug,
   ExternalLink,
   Globe,
+  Keyboard,
   Maximize2,
   Minimize2,
   Plus,
   RotateCcw,
   RotateCw,
   Smartphone,
-  SquareDashedMousePointer,
   X,
 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import Spinner from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   activateTab,
-  claimPresenter,
+  claimStage,
   closeTab,
+  diffInput,
   listLocalServers,
+  modifiersOf,
   navigate,
   normalizeUrl,
-  openDevTools,
   openInBrowser,
-  pickElement,
+  pagePoint,
+  releaseStage,
+  sendInput,
   setPendingTab,
-  useOpenError,
   setViewport,
-  snapshotPainted,
-  useBrowserSnapshot,
   useBrowserTabs,
+  useFrame,
+  useOpenError,
   usePendingTab,
-  usePicking,
   useViewport,
   VIEWPORT_PRESETS,
-  type Snapshot as BrowserSnapshot,
   type BrowserTab,
   type LocalServer,
   type Viewport,
 } from "@/lib/browser";
 import { cn } from "@/lib/utils";
 
-/// The element picker is built and parked: it works, but what it drops into
-/// the composer wants a screenshot beside it before it is worth a button.
-const PICKER = false;
+/// A touch screen is what this is drawn on. Decides two things: the page is
+/// laid out as a phone and driven with touch events, and the toolbar offers
+/// a way to bring the soft keyboard up, since a tap on a field inside a
+/// picture of a page raises nothing.
+const TOUCH = typeof navigator !== "undefined" && navigator.maxTouchPoints > 0;
 
 /// The toolbar sits on the card surface, a step off the ghost hover fill at
 /// best, so a hovered button there was invisible. A wash of the foreground
 /// instead.
 const TOOL_BTN = "hover:bg-foreground/10 aria-expanded:bg-foreground/10";
 
-/// Every tooltip here opens upward. Below the toolbar is the page, a native
-/// view nothing in the DOM can draw over, so a tooltip dropped there is a
-/// tooltip nobody sees.
 const TIP_SIDE = "top" as const;
 
 /// The session's browser: tab strip, URL bar, navigation, and the page.
@@ -66,10 +64,9 @@ const TIP_SIDE = "top" as const;
 /// lives; the main column's is the full view, reached by the expand button,
 /// and while that is open the panel says so instead of drawing a second copy.
 ///
-/// The page is a native view Chromium draws into the window above the
-/// webview; nothing here renders it. The stage below reports its rect and
-/// Rust moves the view onto it. The full view outranks the panel, so should
-/// both ever be on screen the page lands in the full view.
+/// The page is a screencast of a headless Chromium on the machine running the
+/// runtime, drawn as an image the pane sizes; pointer and key events on that
+/// image go back as CDP input. Same picture on the desktop and on a phone.
 export default function BrowserPane({
   sessionId,
   active,
@@ -90,40 +87,10 @@ export default function BrowserPane({
   const pending = usePendingTab(sessionId);
   const current = pending ? null : (tabs.find((t) => t.active) ?? null);
   const viewport = useViewport(sessionId);
-  const snapshot = useBrowserSnapshot(sessionId);
   const [deviceBar, setDeviceBar] = useState(false);
-  const key = useId();
-  const stageRef = useRef<HTMLDivElement>(null);
-  const frameRef = useRef<HTMLDivElement>(null);
+  const [typing, setTyping] = useState(false);
   const standingAside = mode === "panel" && fullOpen;
-  // The empty state stands in for the page: nothing open, or a new tab
-  // waiting for its first URL.
   const empty = !current;
-
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!active || standingAside || !stage || empty) {
-      claimPresenter(key, null);
-      return;
-    }
-    const priority = mode === "full" ? 2 : 1;
-    // The device frame is the page when one is set; the native view cannot
-    // be clipped by the DOM, so the frame is sized to fit the stage below.
-    const report = () => {
-      const target = frameRef.current ?? stage;
-      claimPresenter(key, { priority, sessionId, rect: target.getBoundingClientRect() });
-    };
-    report();
-    const observer = new ResizeObserver(report);
-    observer.observe(stage);
-    if (frameRef.current) observer.observe(frameRef.current);
-    window.addEventListener("resize", report);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", report);
-      claimPresenter(key, null);
-    };
-  }, [sessionId, key, active, mode, standingAside, empty, viewport]);
 
   if (standingAside) {
     return (
@@ -148,77 +115,314 @@ export default function BrowserPane({
         mode={mode}
         deviceBar={deviceBar}
         onToggleDeviceBar={() => setDeviceBar((v) => !v)}
+        typing={typing}
+        onToggleTyping={() => setTyping((v) => !v)}
         onExpand={onExpand}
         onCollapse={onCollapse}
       />
       {deviceBar && (
         <DeviceBar sessionId={sessionId} viewport={viewport} onClose={() => setDeviceBar(false)} />
       )}
-      <div
-        ref={stageRef}
-        className={cn(
-          "relative min-h-0 flex-1 bg-background",
-          viewport && !empty && "flex items-start justify-center overflow-hidden bg-surface-raised p-3",
-        )}
-      >
-        {empty ? (
-          <EmptyState sessionId={sessionId} />
-        ) : viewport ? (
-          // Clamped to the stage on both axes rather than scrolled: the page
-          // is a native view, and a DOM scroll container cannot clip it.
-          <div
-            ref={frameRef}
-            className="relative shrink-0 rounded-sm shadow-[0_0_0_1px_var(--border)]"
-            style={{
-              width: `min(${viewport.width}px, 100%)`,
-              height: `min(${viewport.height}px, 100%)`,
-            }}
-          >
-            <Snapshot of={snapshot} />
-          </div>
-        ) : (
-          <Snapshot of={snapshot} />
-        )}
-      </div>
+      {typing && !empty && <TypingStrip sessionId={sessionId} onClose={() => setTyping(false)} />}
+      {empty ? (
+        <div className="relative min-h-0 flex-1 bg-background">
+          <Servers sessionId={sessionId} />
+        </div>
+      ) : (
+        <Stage sessionId={sessionId} active={active} viewport={viewport} />
+      )}
     </div>
   );
 }
 
-/// Stands in for the native view while a modal has it hidden, and while a
-/// shot is under way. Fills the same rect the view did, so the capture
-/// lands with no scaling.
+/// Where the page is drawn, and where the reader's hands land on it.
 ///
-/// **A shot draws this and nothing else.** A scrim and a camera sat over it
-/// for a while, and they were the only thing anybody could see: the still
-/// is the page, pixel for pixel, so freezing it is invisible by
-/// construction and anything drawn on top is a flash where there was none.
-/// A screenshot is not an event the reader has to be told about — they
-/// asked for it, and the file lands in the transcript.
-function Snapshot({ of }: { of: BrowserSnapshot | null }) {
-  if (!of?.url) return null;
+/// Responsive, the page is laid out at the stage's own size and the frame
+/// fills it; with a device preset the page is laid out at that size and drawn
+/// centred, scrolling where it is taller than the stage. Either way the frame
+/// is drawn at the size the page was laid out at, so a pointer maps by the
+/// drawn box alone.
+function Stage({
+  sessionId,
+  active,
+  viewport,
+}: {
+  sessionId: string;
+  active: boolean;
+  viewport: Viewport | null;
+}) {
+  const key = useId();
+  const frame = useFrame(sessionId);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const measure = () => {
+      const r = stage.getBoundingClientRect();
+      const next = { width: Math.round(r.width), height: Math.round(r.height) };
+      if (next.width > 0 && next.height > 0) {
+        setBox((was) => (was?.width === next.width && was?.height === next.height ? was : next));
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+
+  const wanted = viewport ?? box;
+  const width = wanted?.width ?? 0;
+  const height = wanted?.height ?? 0;
+
+  useEffect(() => {
+    if (!active || !width || !height) {
+      releaseStage(key);
+      return;
+    }
+    // Two device pixels per CSS pixel at most: a retina desktop's third
+    // buys nothing legible and triples what every frame weighs on the wire.
+    const scale = Math.min(window.devicePixelRatio || 1, 2);
+    claimStage(key, sessionId, { width, height, scale, touch: TOUCH });
+    return () => releaseStage(key);
+  }, [key, sessionId, active, width, height]);
+
   return (
-    <img
-      src={of.url}
-      alt=""
-      className="absolute inset-0 h-full w-full"
-      onLoad={(e) => {
-        void e.currentTarget
-          .decode()
-          .catch(() => undefined)
-          .then(() => snapshotPainted(of));
+    <div
+      ref={stageRef}
+      className={cn(
+        "relative min-h-0 flex-1 bg-background",
+        viewport
+          ? "flex items-start justify-center overflow-auto bg-surface-raised p-3"
+          : "overflow-hidden",
+      )}
+    >
+      {wanted && (
+        <Page
+          sessionId={sessionId}
+          src={frame?.src ?? null}
+          width={width}
+          height={height}
+          framed={!!viewport}
+        />
+      )}
+    </div>
+  );
+}
+
+const BUTTONS = ["left", "middle", "right"] as const;
+
+/// The frame, and every event on it turned into CDP input.
+function Page({
+  sessionId,
+  src,
+  width,
+  height,
+  framed,
+}: {
+  sessionId: string;
+  src: string | null;
+  width: number;
+  height: number;
+  framed: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const pressed = useRef<number | null>(null);
+  const moveQueued = useRef(false);
+
+  const at = (e: { clientX: number; clientY: number }) => {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box) return { x: 0, y: 0 };
+    return pagePoint({ x: e.clientX, y: e.clientY }, box, { width, height });
+  };
+
+  const mouse = (type: string, e: React.PointerEvent, button: number) => {
+    const { x, y } = at(e);
+    sendInput(sessionId, "Input.dispatchMouseEvent", {
+      type,
+      x,
+      y,
+      button: BUTTONS[button] ?? "none",
+      buttons: e.buttons,
+      clickCount: type === "mouseMoved" ? 0 : Math.max(1, e.detail),
+      modifiers: modifiersOf(e),
+    });
+  };
+
+  const touch = (type: string, e: React.PointerEvent) => {
+    const points = type === "touchEnd" ? [] : [at(e)];
+    sendInput(sessionId, "Input.dispatchTouchEvent", { type, touchPoints: points, modifiers: modifiersOf(e) });
+  };
+
+  // React registers `wheel` passively, so the scroll it carries would reach
+  // the stage as well as the page; a listener of our own can refuse it.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const unit = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? height : 1;
+      const { x, y } = at(e);
+      sendInput(sessionId, "Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        x,
+        y,
+        deltaX: e.deltaX * unit,
+        deltaY: e.deltaY * unit,
+        modifiers: modifiersOf(e),
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [sessionId, width, height]);
+
+  const key = (e: React.KeyboardEvent, down: boolean) => {
+    // The app's own chords, on either accelerator. They reach `document`
+    // whatever happens here, so sending them on as well would fire twice.
+    if (e.metaKey || e.ctrlKey) return;
+    e.preventDefault();
+    sendKey(sessionId, e, down);
+  };
+
+  return (
+    <div
+      ref={ref}
+      tabIndex={0}
+      role="application"
+      aria-label="Page"
+      className={cn(
+        "relative shrink-0 cursor-default select-none outline-none",
+        framed && "rounded-sm shadow-[0_0_0_1px_var(--border)]",
+      )}
+      style={{ width, height, touchAction: "none" }}
+      onPointerDown={(e) => {
+        e.currentTarget.focus();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        pressed.current = e.button;
+        if (e.pointerType === "touch") touch("touchStart", e);
+        else mouse("mousePressed", e, e.button);
       }}
-    />
+      onPointerMove={(e) => {
+        if (e.pointerType === "touch") {
+          if (pressed.current !== null) touch("touchMove", e);
+          return;
+        }
+        // One move a frame: the pointer reports far faster than a frame
+        // can come back, and every one is a round trip.
+        if (moveQueued.current) return;
+        moveQueued.current = true;
+        const { clientX, clientY, buttons, altKey, ctrlKey, metaKey, shiftKey } = e;
+        requestAnimationFrame(() => {
+          moveQueued.current = false;
+          const { x, y } = at({ clientX, clientY });
+          sendInput(sessionId, "Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x,
+            y,
+            button: pressed.current === null ? "none" : (BUTTONS[pressed.current] ?? "none"),
+            buttons,
+            modifiers: modifiersOf({ altKey, ctrlKey, metaKey, shiftKey }),
+          });
+        });
+      }}
+      onPointerUp={(e) => {
+        const button = pressed.current ?? e.button;
+        pressed.current = null;
+        if (e.pointerType === "touch") touch("touchEnd", e);
+        else mouse("mouseReleased", e, button);
+      }}
+      onPointerCancel={(e) => {
+        pressed.current = null;
+        if (e.pointerType === "touch") touch("touchCancel", e);
+      }}
+      onContextMenu={(e) => e.preventDefault()}
+      onKeyDown={(e) => key(e, true)}
+      onKeyUp={(e) => key(e, false)}
+    >
+      {src ? (
+        <img src={src} alt="" draggable={false} className="absolute inset-0 h-full w-full" />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+          <Spinner className="size-4" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/// One key, as CDP wants it. A printable key carries its text on the way
+/// down, which is what types it; Enter carries a return so a form submits;
+/// anything else is a raw key the page reads by code.
+function sendKey(sessionId: string, e: { key: string; code: string; keyCode: number; repeat: boolean } & Parameters<typeof modifiersOf>[0], down: boolean) {
+  const printable = e.key.length === 1;
+  const text = printable ? e.key : e.key === "Enter" ? "\r" : undefined;
+  sendInput(sessionId, "Input.dispatchKeyEvent", {
+    type: down ? (text ? "keyDown" : "rawKeyDown") : "keyUp",
+    key: e.key,
+    code: e.code,
+    windowsVirtualKeyCode: e.keyCode,
+    nativeVirtualKeyCode: e.keyCode,
+    autoRepeat: e.repeat,
+    modifiers: modifiersOf(e),
+    ...(down && text ? { text, unmodifiedText: text } : {}),
+  });
+}
+
+/// A text field of the pane's own, for a screen whose keyboard only comes up
+/// for a field it can see. What is typed here is typed into the page: the
+/// field's text is diffed on every change, since an IME rewrites a whole
+/// word as it corrects it, and Enter and Backspace on an empty field go
+/// through as keys.
+function TypingStrip({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+  const last = useRef("");
+  const press = (key: string, code: string, keyCode: number) => {
+    const e = { key, code, keyCode, repeat: false, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false };
+    sendKey(sessionId, e, true);
+    sendKey(sessionId, e, false);
+  };
+  return (
+    <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border bg-card px-2">
+      <input
+        autoFocus
+        aria-label="Type into the page"
+        placeholder="Type into the page"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        className="h-7 min-w-0 flex-1 rounded-md bg-surface-raised px-2.5 text-ui outline-none focus:ring-1 focus:ring-ring dark:bg-background"
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            press("Enter", "Enter", 13);
+            last.current = "";
+            e.currentTarget.value = "";
+          } else if (e.key === "Backspace" && e.currentTarget.value === "") {
+            press("Backspace", "Backspace", 8);
+          } else if (e.key === "Tab") {
+            e.preventDefault();
+            press("Tab", "Tab", 9);
+          }
+        }}
+        onInput={(e) => {
+          const next = e.currentTarget.value;
+          const { del, add } = diffInput(last.current, next);
+          for (let i = 0; i < del; i++) press("Backspace", "Backspace", 8);
+          if (add) sendInput(sessionId, "Input.insertText", { text: add });
+          last.current = next;
+        }}
+      />
+      <Button variant="ghost" size="icon-sm" className={TOOL_BTN} aria-label="Hide keyboard field" onClick={onClose}>
+        <X className="size-3.5" />
+      </Button>
+    </div>
   );
 }
 
 /// Tab strip and URL bar, coloured the way Chrome does it: the strip takes
 /// the panel's own surface, the active tab and toolbar share the card, and
 /// the URL field is cut into it, so which tab the bar belongs to is read
-/// from colour alone. Palette rungs, never `--muted` or `--surface-well`:
-/// those are washes with no hue, and in light mode they drew a grey bar
-/// across a tinted page. The field's rung differs by mode because the ramp
-/// does: `--surface-raised` is a clear step below the card in light and
-/// all but the same colour in dark, where `--background` is the step.
+/// from colour alone.
 function Chrome({
   sessionId,
   tabs,
@@ -227,6 +431,8 @@ function Chrome({
   mode,
   deviceBar,
   onToggleDeviceBar,
+  typing,
+  onToggleTyping,
   onExpand,
   onCollapse,
 }: {
@@ -237,16 +443,16 @@ function Chrome({
   mode: "panel" | "full";
   deviceBar: boolean;
   onToggleDeviceBar: () => void;
+  typing: boolean;
+  onToggleTyping: () => void;
   onExpand?: () => void;
   onCollapse?: () => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const openError = useOpenError(sessionId);
   const inputRef = useRef<HTMLInputElement>(null);
-  const picking = usePicking(sessionId);
   const url = current?.url ?? "";
 
-  // A new tab is for typing into.
   useEffect(() => {
     if (pending) inputRef.current?.focus();
   }, [pending]);
@@ -267,16 +473,13 @@ function Chrome({
   return (
     <div className="shrink-0 border-b border-border">
       {(tabs.length > 0 || pending) && (
-        // Scrolls, but draws no bar: a strip of tabs is read by its tabs, and
-        // a bar under them takes the height the tabs' own bottom edge needs.
         <div className="flex h-8 items-end gap-1 overflow-x-auto bg-sidebar px-2.5 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {tabs.map((tab) => (
             <TabButton
               key={tab.id}
               active={tab.active && !pending}
-              title={tab.error ? `${tab.error} — ${tab.url}` : tab.url}
-              icon={<Favicon tab={tab} />}
-              label={tab.error ? "Can't reach page" : tab.title || hostOf(tab.url)}
+              label={tab.title || hostOf(tab.url)}
+              loading={tab.loading}
               onPick={() => {
                 setPendingTab(sessionId, false);
                 if (!tab.active) void activateTab(sessionId, tab.id);
@@ -287,9 +490,8 @@ function Chrome({
           {pending && (
             <TabButton
               active
-              title="New tab"
-              icon={<Globe className="size-3.5 shrink-0 opacity-60" />}
               label="New tab"
+              loading={false}
               onPick={() => inputRef.current?.focus()}
               onClose={() => setPendingTab(sessionId, false)}
             />
@@ -312,7 +514,7 @@ function Chrome({
           size="icon-sm"
           className={TOOL_BTN}
           aria-label="Back"
-          disabled={!current?.canGoBack}
+          disabled={!current}
           onClick={() => void navigate(sessionId, "back")}
         >
           <ArrowLeft className="size-3.5" />
@@ -322,7 +524,7 @@ function Chrome({
           size="icon-sm"
           className={TOOL_BTN}
           aria-label="Forward"
-          disabled={!current?.canGoForward}
+          disabled={!current}
           onClick={() => void navigate(sessionId, "forward")}
         >
           <ArrowRight className="size-3.5" />
@@ -371,25 +573,18 @@ function Chrome({
             className="h-7 w-full rounded-md bg-surface-raised px-2.5 font-mono dark:bg-background text-ui outline-none focus:ring-1 focus:ring-ring"
           />
         </form>
-        {PICKER && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={picking ? "Cancel picking" : "Pick an element for the chat"}
-                aria-pressed={picking}
-                disabled={!current}
-                className={cn(TOOL_BTN, picking && "bg-primary/15 text-primary")}
-                onClick={() => void pickElement(sessionId, !picking)}
-              >
-                <SquareDashedMousePointer className="size-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side={TIP_SIDE}>
-              {picking ? "Click an element, or Esc" : "Pick an element for the chat"}
-            </TooltipContent>
-          </Tooltip>
+        {TOUCH && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Type into the page"
+            aria-pressed={typing}
+            disabled={!current}
+            className={cn(TOOL_BTN, typing && "bg-foreground/10")}
+            onClick={onToggleTyping}
+          >
+            <Keyboard className="size-3.5" />
+          </Button>
         )}
         <Tooltip>
           <TooltipTrigger asChild>
@@ -406,30 +601,6 @@ function Chrome({
             </Button>
           </TooltipTrigger>
           <TooltipContent side={TIP_SIDE}>Device size</TooltipContent>
-        </Tooltip>
-        {/* Plain buttons rather than a menu: a menu drops over the page, and
-            the page is a native view nothing in the DOM can draw above. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className={TOOL_BTN}
-              aria-label="Developer tools"
-              disabled={!current}
-              onClick={() => void openDevTools(sessionId)}
-            >
-              <Bug className="size-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side={TIP_SIDE}>
-            Developer tools
-            <KbdGroup>
-              <Kbd>⌥</Kbd>
-              <Kbd>⌘</Kbd>
-              <Kbd>I</Kbd>
-            </KbdGroup>
-          </TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -474,16 +645,14 @@ function Chrome({
 
 function TabButton({
   active,
-  title,
-  icon,
   label,
+  loading,
   onPick,
   onClose,
 }: {
   active: boolean;
-  title: string;
-  icon: React.ReactNode;
   label: string;
+  loading: boolean;
   onPick: () => void;
   onClose: () => void;
 }) {
@@ -492,7 +661,6 @@ function TabButton({
       role="tab"
       aria-selected={active}
       tabIndex={0}
-      title={title}
       onClick={onPick}
       onKeyDown={(e) => e.key === "Enter" && onPick()}
       className={cn(
@@ -502,7 +670,7 @@ function TabButton({
           : "text-muted-foreground hover:bg-card/50 hover:text-foreground",
       )}
     >
-      {icon}
+      {loading ? <Spinner className="size-3.5 shrink-0" /> : <Globe className="size-3.5 shrink-0 opacity-60" />}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <button
         type="button"
@@ -516,23 +684,6 @@ function TabButton({
         <X className="size-3" />
       </button>
     </div>
-  );
-}
-
-/// The page's icon, or a globe until one arrives or where the site has none.
-function Favicon({ tab }: { tab: BrowserTab }) {
-  const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [tab.favicon]);
-  if (!tab.favicon || broken || tab.error) {
-    return <Globe className="size-3.5 shrink-0 opacity-60" />;
-  }
-  return (
-    <img
-      src={tab.favicon}
-      alt=""
-      className="size-3.5 shrink-0 rounded-[2px]"
-      onError={() => setBroken(true)}
-    />
   );
 }
 
@@ -626,10 +777,6 @@ function DeviceBar({
 /// What to open when nothing is: this checkout's dev servers, the session's
 /// own marked. Polled while on screen, since a server starting is the
 /// moment the list is looked at.
-function EmptyState({ sessionId }: { sessionId: string }) {
-  return <Servers sessionId={sessionId} />;
-}
-
 function Servers({ sessionId }: { sessionId: string }) {
   const [servers, setServers] = useState<LocalServer[]>([]);
 
@@ -649,8 +796,6 @@ function Servers({ sessionId }: { sessionId: string }) {
 
   const open = (url: string) => void openInBrowser(sessionId, url, true).catch(() => undefined);
 
-  // One column, one left edge: the heading, the rows and the hint all start
-  // at the same x, and the column as a whole sits in the middle.
   return (
     <div className="flex h-full items-center justify-center p-8 text-ui">
       <div className="flex w-full max-w-sm flex-col gap-4">

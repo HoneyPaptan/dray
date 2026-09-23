@@ -14,6 +14,7 @@ function model(id: string, supportsFast: boolean): Model {
     acceptsImages: true,
     secondary: false,
     supportsFast,
+    free: false,
   };
 }
 

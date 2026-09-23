@@ -35,6 +35,37 @@ const IMAGE_TYPES: &[(&str, &str)] = &[
 /// can still open it with a tool.
 pub(crate) const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 
+/// Whether these bytes carry the whole picture, judged on the terminator the
+/// format ends with.
+///
+/// A phone upload crosses a websocket, a relay and a JSON string, and a short
+/// read anywhere on that chain lands here as a file that opens, draws a
+/// thumbnail, and is refused by the agent — two screenshots arrived that way,
+/// both missing their `FFD9`. Structural rather than a decode: a terminator is
+/// the one thing every truncation loses, and it costs a few bytes of comparison
+/// where decoding costs a dependency and the pixels.
+///
+/// Written to under-match. An unknown mime and a format with no terminator both
+/// answer `true`, so this only ever refuses a file it can prove is short.
+fn looks_complete(mime: &str, bytes: &[u8]) -> bool {
+    match mime {
+        "image/jpeg" => bytes.ends_with(&[0xFF, 0xD9]),
+        // The trailing CRC is what makes this the last eight bytes rather than
+        // the last four.
+        "image/png" => bytes.len() >= 12 && bytes[bytes.len() - 8..].starts_with(b"IEND"),
+        "image/gif" => bytes.last() == Some(&0x3B),
+        // RIFF states its own length, so the file says how long it should be.
+        "image/webp" => match bytes.get(4..8) {
+            Some(size) => {
+                let stated = u32::from_le_bytes([size[0], size[1], size[2], size[3]]) as usize;
+                bytes.len() >= stated.saturating_add(8)
+            }
+            None => false,
+        },
+        _ => true,
+    }
+}
+
 /// One thing the user attached, as the composer needs to draw it.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "events.ts")]
@@ -82,6 +113,42 @@ pub(crate) fn image_mime(path: &Path) -> Option<&'static str> {
         .iter()
         .find(|(e, _)| *e == ext)
         .map(|(_, mime)| *mime)
+}
+
+/// The extension the bytes say they are, for a file that arrived without one.
+///
+/// A phone's picker answers a `content://` URI rather than a filename, so an
+/// upload from it is named after the URI's last segment — a bare number — and
+/// everything downstream keys on extension: `image_mime` for the block type,
+/// `looks_complete` for the terminator check, `is_image` for the tile. Read off
+/// the magic bytes instead, which every one of the four formats opens with, so
+/// a nameless upload still lands as the picture it is rather than as a mention
+/// naming a file the model cannot open.
+fn sniff_image_ext(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some("png")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+/// `name` with the extension its bytes justify, where it carries none at all.
+/// A name already naming a type — any type — is left alone: the reader's own
+/// word for their file beats a guess, and `looks_complete` reads the same table.
+fn named_for_bytes(name: String, bytes: &[u8]) -> String {
+    if Path::new(&name).extension().is_some() {
+        return name;
+    }
+    match sniff_image_ext(bytes) {
+        Some(ext) => format!("{name}.{ext}"),
+        None => name,
+    }
 }
 
 /// Reads one path into the shape the composer draws. Errors for a directory or
@@ -163,6 +230,17 @@ pub async fn upload_attachment(name: String, data: String) -> Result<Attachment>
         .map(|n| n.to_string_lossy().into_owned())
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| "upload".to_string());
+    let safe = named_for_bytes(safe, &bytes);
+
+    // Checked before anything is written, so a short upload leaves no file
+    // behind for the send path to find. Refused rather than repaired: the
+    // missing bytes are pixels, and an image the reader believes was attached
+    // is worse than one they were told to attach again.
+    if let Some(mime) = image_mime(Path::new(&safe)) {
+        if !looks_complete(mime, &bytes) {
+            anyhow::bail!("{safe} arrived incomplete. Try attaching it again.");
+        }
+    }
 
     let dir = get_home_app_dir().await?.join("uploads");
     fs::create_dir_all(&dir).await?;
@@ -513,5 +591,39 @@ mod archive_tests {
 
         fs::remove_file(&src).await.ok();
         delete_session_attachments(&session).await.unwrap();
+    }
+
+    /// A terminator is what a truncation takes, and the only thing this reads.
+    #[test]
+    fn a_truncated_image_is_refused() {
+        assert!(looks_complete("image/jpeg", &[0xFF, 0xD8, 0xFF, 0xD9]));
+        assert!(!looks_complete("image/jpeg", &[0xFF, 0xD8, 0x12, 0x34]));
+
+        let mut png = vec![0u8; 4];
+        png.extend_from_slice(b"IEND\0\0\0\0");
+        assert!(looks_complete("image/png", &png));
+        assert!(!looks_complete("image/png", &[0u8; 12]));
+
+        assert!(looks_complete("image/gif", &[0x00, 0x3B]));
+        assert!(!looks_complete("image/gif", &[0x3B, 0x00]));
+    }
+
+    /// A format with no terminator to read must never be refused on a guess.
+    #[test]
+    fn an_unreadable_shape_passes() {
+        assert!(looks_complete("image/heic", &[1, 2, 3]));
+    }
+
+    /// A nameless upload is named by its bytes, and a named one is left alone.
+    #[test]
+    fn a_nameless_picture_is_named_by_its_bytes() {
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        assert_eq!(named_for_bytes("1234".into(), &jpeg), "1234.jpg");
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&[0; 8]);
+        assert_eq!(named_for_bytes("shot".into(), &png), "shot.png");
+        assert_eq!(named_for_bytes("shot.jpeg".into(), &png), "shot.jpeg");
+        assert_eq!(named_for_bytes("notes.txt".into(), &jpeg), "notes.txt");
+        assert_eq!(named_for_bytes("blob".into(), b"hello"), "blob");
     }
 }

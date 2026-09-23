@@ -5,6 +5,24 @@ export type RemoteEndpoint = { url: string; token: string };
 
 const ENDPOINT_KEY = "dray.remote";
 
+/// The endpoint the build was given, for a phone that has never been pointed
+/// at one by hand.
+///
+/// `scripts/mobile-env.mjs` writes these before `build:mobile` from the three
+/// things only this machine knows: its tailnet address, the port the desktop
+/// serves on, and the token the desktop minted for itself. So installing the
+/// APK is the whole of pairing.
+///
+/// Read **below** the stored endpoint, never over it: the connect form is still
+/// how a phone is moved to another host, and a baked default that outranked it
+/// would undo that on every launch. Absent on the desktop build, and absent on
+/// a mobile build made without the script, where the form is the only route in
+/// exactly as before.
+const BAKED: RemoteEndpoint | null =
+  import.meta.env.VITE_DRAY_URL && import.meta.env.VITE_DRAY_TOKEN
+    ? { url: import.meta.env.VITE_DRAY_URL, token: import.meta.env.VITE_DRAY_TOKEN }
+    : null;
+
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 15_000;
 
@@ -22,12 +40,12 @@ type ServerFrame =
 export function readEndpoint(): RemoteEndpoint | null {
   try {
     const raw = localStorage.getItem(ENDPOINT_KEY);
-    if (!raw) return null;
+    if (!raw) return BAKED;
     const parsed = JSON.parse(raw) as Partial<RemoteEndpoint>;
-    if (!parsed.url || !parsed.token) return null;
+    if (!parsed.url || !parsed.token) return BAKED;
     return { url: parsed.url, token: parsed.token };
   } catch {
-    return null;
+    return BAKED;
   }
 }
 

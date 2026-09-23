@@ -97,7 +97,10 @@ export default function QuestionRequest({
     // a full-width row leaves most of itself empty and puts the click target a
     // long way from the text naming it. No card chrome: the choices carry their
     // own borders, and a box around boxes reads as a third surface.
-    <div className="max-w-md">
+    // `w-full` beside the cap, not the cap alone: 28rem is wider than a phone's
+    // whole viewport, and a card that overruns its column is what put a
+    // horizontal scrollbar under the transcript.
+    <div className="w-full max-w-md">
       <Questionnaire
         ref={formRef}
         className="gap-3"
@@ -159,7 +162,10 @@ export default function QuestionRequest({
                     </QuestionnaireChoiceDescription>
                   )}
                   {option.preview && (
-                    <pre className="mt-1.5 overflow-x-auto rounded-md border border-border px-2.5 py-2 font-mono text-xs">
+                    // `max-w-full` is what keeps the scroll inside this box: a
+                    // preview is laid out in spaces and must not wrap, so
+                    // without it the longest line is the card's width.
+                    <pre className="mt-1.5 max-w-full overflow-x-auto rounded-md border border-border px-2.5 py-2 font-mono text-xs">
                       {option.preview}
                     </pre>
                   )}

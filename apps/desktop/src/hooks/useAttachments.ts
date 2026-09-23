@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { call, IS_REMOTE } from "@/lib/transport";
 import { open } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
 
 import type { Attachment } from "@/types/events";
 
@@ -24,6 +25,17 @@ const listeners = new Set<() => void>();
 // snapshot that isn't reference-equal to the last, so minting `[]` per read
 // would loop forever.
 const EMPTY: Attachment[] = [];
+
+/// Why the last attach did nothing, or `null`.
+///
+/// An upload is the one attach path that can fail for a reason the reader has
+/// to act on — a phone's bytes cross a socket and a relay, and a short read
+/// there is refused in Rust rather than written. That used to reach a
+/// `console.error` and nothing else, so the file simply never appeared and the
+/// tray said as much about it as about a file nobody picked. Module-level for
+/// the same reason the attachments themselves are: the `+` button and the
+/// composer cannot pass props to each other.
+let attachError: string | null = null;
 
 function emit() {
   for (const listener of listeners) listener();
@@ -73,12 +85,53 @@ export async function pickAttachments(sessionId: string | null) {
   await addAttachmentPaths(sessionId, Array.isArray(picked) ? picked : [picked]);
 }
 
-/// The webview's own picker, which is the one that hands back bytes.
+/// The last segment of a picked location, for the upload's name.
 ///
-/// `plugin-dialog` answers with a path, which is exactly what a remote client
-/// cannot use. A plain file input is also what reaches Android's photo picker
-/// and its camera, both of which the shell would otherwise need permissions and
-/// a plugin apiece to offer.
+/// On Android the dialog answers a `content://` URI whose tail is a bare id
+/// rather than a filename; the backend names the bytes by their own magic where
+/// the name carries no extension, so a bare id is enough here.
+function pickedName(location: string): string {
+  const tail = location.split("/").filter(Boolean).pop() ?? "upload";
+  try {
+    return decodeURIComponent(tail);
+  } catch {
+    return tail;
+  }
+}
+
+/// The phone's picker, through the shell rather than the WebView.
+///
+/// `<input type=file>` was the first shape and its blobs arrived short — five
+/// screenshots reached the laptop as valid, padded base64 of a truncated JPEG,
+/// so the bytes were already cut inside the WebView, and re-reading the same
+/// blob re-read the same cut. The dialog plugin answers a `content://` URI and
+/// the fs plugin opens it through the ContentResolver from Rust, which is a
+/// real file descriptor read to its end rather than whatever the WebView's
+/// blob layer handed over.
+///
+/// `null` where the shell offers no dialog — a browser tab on the mobile build —
+/// so the caller can fall back to the input, which is where this started.
+async function pickThroughShell(): Promise<{ name: string; bytes: Uint8Array }[] | null> {
+  let picked: string | string[] | null;
+  try {
+    picked = await open({ multiple: true, title: "Attach files" });
+  } catch {
+    return null;
+  }
+  if (!picked) return [];
+
+  const locations = Array.isArray(picked) ? picked : [picked];
+  const files: { name: string; bytes: Uint8Array }[] = [];
+  for (const location of locations) {
+    files.push({ name: pickedName(location), bytes: await readFile(location) });
+  }
+  return files;
+}
+
+/// The webview's own picker, kept as the fallback for a mobile build running
+/// somewhere the shell's dialog is not — a browser tab under `dev:mobile`.
+/// On the phone itself `pickThroughShell` is what runs, since this one's blobs
+/// arrived short.
 function pickFiles(): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
@@ -100,31 +153,74 @@ function pickFiles(): Promise<File[]> {
   });
 }
 
-/// Base64 without reading the whole file into a string a character at a time.
-/// `FileReader` hands back a `data:` URL, whose payload is already the encoding
-/// we want — spreading a multi-megabyte `Uint8Array` into `fromCharCode` blows
-/// the argument limit instead.
-function encode(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error);
-    reader.onload = () => {
-      const url = String(reader.result);
-      resolve(url.slice(url.indexOf(",") + 1));
-    };
-    reader.readAsDataURL(file);
-  });
+/// How many times a short read is tried again before it is given up on.
+///
+/// Three because a re-read is cheap and the failure it cures is intermittent:
+/// the same screenshot that arrives short once arrives whole on the next pass.
+const READ_ATTEMPTS = 3;
+
+/// Every byte of `file`, or a refusal naming how much of it arrived.
+///
+/// A phone's file comes out of a content provider, not off a path, and that
+/// stream can end early — Android hands the blob back with no error and the
+/// read resolves with a prefix. Measured: five screenshots attached from the
+/// phone reached the runtime as valid base64 of a *truncated* JPEG, so the
+/// bytes were already short in the webview rather than cut anywhere on the
+/// wire.
+///
+/// `file.size` is the provider's own answer and is what a short read is judged
+/// against. A provider that understates it defeats this, which is why
+/// `upload_attachment` still checks the picture's own terminator on the far
+/// side — this is the half that can retry, that one is the half that cannot be
+/// fooled.
+async function readWhole(file: File): Promise<Uint8Array> {
+  let shortest = 0;
+
+  for (let attempt = 0; attempt < READ_ATTEMPTS; attempt++) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (!file.size || bytes.byteLength >= file.size) return bytes;
+    shortest = bytes.byteLength;
+  }
+
+  throw new Error(
+    `${file.name} could not be read whole (${shortest} of ${file.size} bytes). Try attaching it again.`,
+  );
+}
+
+/// Base64 without spreading a multi-megabyte array into one call.
+/// `String.fromCharCode` takes its bytes as arguments, so a whole image at once
+/// blows the argument limit; 32KB at a time is well under it.
+function toBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
 }
 
 async function uploadPicked(sessionId: string | null) {
-  const files = await pickFiles();
+  attachError = null;
+  emit();
+
+  let files: { name: string; bytes: () => Promise<Uint8Array> }[];
+  try {
+    const shell = await pickThroughShell();
+    files = shell
+      ? shell.map((f) => ({ name: f.name, bytes: async () => f.bytes }))
+      : (await pickFiles()).map((f) => ({ name: f.name, bytes: () => readWhole(f) }));
+  } catch (e) {
+    attachError = e instanceof Error ? e.message : "could not read the picked file";
+    emit();
+    return;
+  }
   if (!files.length) return;
 
   for (const file of files) {
     try {
       const added = await call<Attachment>("upload_attachment", {
         name: file.name,
-        data: await encode(file),
+        data: toBase64(await file.bytes()),
       });
       // Re-read per file rather than once at the end: an upload is a round trip
       // and the reader may pin something else while it is in flight.
@@ -132,6 +228,8 @@ async function uploadPicked(sessionId: string | null) {
       if (!now.some((a) => a.path === added.path)) write(sessionId, [...now, added]);
     } catch (e) {
       console.error(`could not attach ${file.name}`, e);
+      attachError = e instanceof Error ? e.message : `could not attach ${file.name}`;
+      emit();
     }
   }
 }
@@ -172,4 +270,9 @@ export function restoreAttachments(sessionId: string | null, attachments: Attach
   if (!fresh.length) return;
 
   write(sessionId, [...current, ...fresh]);
+}
+
+/// The last attach failure, cleared when the next attach starts.
+export function useAttachError(): string | null {
+  return useSyncExternalStore(subscribe, () => attachError);
 }

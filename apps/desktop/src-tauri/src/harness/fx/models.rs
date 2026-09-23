@@ -548,6 +548,7 @@ fn supports_fast(id: &str, provider: &str, siblings: &HashSet<&str>) -> bool {
 fn id_to_model(id: String, provider: &str, siblings: &HashSet<&str>) -> Model {
     Model {
         supports_fast: supports_fast(&id, provider, siblings),
+        free: false,
         // The guess. [`with_learned_ladders`] replaces it on the way out with
         // what a session running this model actually reported.
         efforts: ladder_for(provider),

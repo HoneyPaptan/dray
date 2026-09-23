@@ -310,6 +310,11 @@ async fn title_command(harness: Harness, prompt: &str, cwd: &str) -> Result<Comm
         // a session behind in the reader's own `opencode session list`. Worth
         // paying once that can be avoided, and not before.
         Harness::Opencode => bail!("opencode has no title child that does not persist a session"),
+        // Cline's own `--json` mode would write one, but every run of it costs
+        // a model call on the reader's billed plan — where every other titler
+        // here rides a free or already-paid child. The prompt-derived title
+        // stands until that is worth paying for.
+        Harness::Cline => bail!("cline has no title child that costs nothing"),
         Harness::Fx => {
             let bin = crate::binpath::fx().await;
             let mut cmd = Command::new(&bin);

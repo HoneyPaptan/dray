@@ -105,3 +105,21 @@ export function basename(path: string): string {
   const parts = path.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || path;
 }
+
+/// A dollar figure that never rounds a real spend away to nothing.
+///
+/// Two cents is `$0.02` and a whole session on a cheap model can be half a
+/// cent, which `toFixed(2)` draws as `$0.00` — the one reading a spend line
+/// must not give, since it says the same thing as free. So anything under a
+/// cent keeps four decimals, and anything under *that* is drawn as a bound
+/// rather than as a row of zeroes: `$0.0000` claims a precision the figure
+/// does not have and reads as nothing spent all over again.
+///
+/// A real zero stays `$0.00`. It is what a free model genuinely costs, and it
+/// is the answer somebody on one is looking for.
+export function money(usd: number): string {
+  if (usd === 0) return "$0.00";
+  if (usd < 0.0001) return "<$0.0001";
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
+}

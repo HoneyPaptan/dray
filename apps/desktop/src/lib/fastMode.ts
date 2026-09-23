@@ -31,6 +31,9 @@ export const FAST_MODE_BY_HARNESS: Record<Harness, FastModeSupport> = {
   // Nothing names one: no flag on `opencode acp`, no key in its config, and a
   // session's options are model and mode alone.
   opencode: "none",
+  // Nothing names one either: no flag on `cline --acp`, and a session's four
+  // options are provider, model, mode and auto-approve.
+  cline: "none",
 };
 
 /// Whether a harness's fast mode stands even with no model picked.

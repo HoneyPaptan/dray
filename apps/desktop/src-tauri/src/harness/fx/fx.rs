@@ -1311,6 +1311,7 @@ mod tests {
             accepts_images: false,
             secondary: false,
             supports_fast: true,
+            free: false,
         }
     }
 

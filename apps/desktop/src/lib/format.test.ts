@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { calendarDay } from "@/lib/format";
+import { calendarDay, money } from "@/lib/format";
 
 /// Fixed so "today" is a known afternoon rather than whenever the suite runs —
 /// every case here is about which side of a midnight a timestamp falls on, and
@@ -51,5 +51,31 @@ describe("calendarDay", () => {
   /// — reads as today rather than as a negative day count.
   it("reads a future stamp as today", () => {
     expect(calendarDay(new Date(2026, 7, 28, 9, 0).toISOString())).toBe("Today");
+  });
+});
+
+describe("money", () => {
+  /// The bug this exists for: a real spend drawn as `$0.00` says the same
+  /// thing as a free model.
+  it("keeps a sub-cent figure visible", () => {
+    expect(money(0.00507623)).toBe("$0.0051");
+    expect(money(0.0122)).toBe("$0.01");
+  });
+
+  /// Zero is a real answer, not a rounding artefact — it is what a free model
+  /// costs.
+  it("draws a true zero plainly", () => {
+    expect(money(0)).toBe("$0.00");
+  });
+
+  /// Below four decimals every digit would be zero, which reads as nothing
+  /// spent. A bound says the true thing instead.
+  it("bounds a figure too small to write", () => {
+    expect(money(0.00002)).toBe("<$0.0001");
+  });
+
+  it("keeps ordinary amounts at two decimals", () => {
+    expect(money(1.5)).toBe("$1.50");
+    expect(money(17.275616)).toBe("$17.28");
   });
 });

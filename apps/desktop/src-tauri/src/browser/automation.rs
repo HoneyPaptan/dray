@@ -561,6 +561,9 @@ async fn perform(session: &str, action: BrowserAction) -> Answer {
             // closes there for the same reason: a capture that failed must
             // not leave the pane holding the camera card for good.
             let _ = be::cdp(session, tab, "Emulation.clearDeviceMetricsOverride", json!({})).await;
+            // The pane's own layout goes back on, or the page it is drawing
+            // stays reflowed to Chromium's default until the reader resizes.
+            be::restore_metrics(session, tab).await;
             be::uncover(session, shot).await;
             drop(held);
             let bytes = bytes?;

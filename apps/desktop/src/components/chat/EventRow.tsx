@@ -16,9 +16,12 @@ function Notice({
 }: {
   children: React.ReactNode;
   tone?: "muted" | "destructive";
-  /// Lets the text run onto a second line. Off by default — most notices are
-  /// context the reader skims — but on where every word carries information the
-  /// reader has to act on, and a clipped tail would hide it.
+  /// Lets the text run onto a second line, and keeps the line breaks the
+  /// sentence already had. Off by default — most notices are context the reader
+  /// skims — but on where every word carries information the reader has to act
+  /// on, and a clipped tail would hide it. The breaks matter because a harness
+  /// that died quotes its own stderr here, and a stack trace collapsed onto one
+  /// line is the one shape it cannot be read in.
   wrap?: boolean;
 }) {
   return (
@@ -29,7 +32,9 @@ function Notice({
         tone === "destructive" ? "text-destructive" : "text-muted-foreground",
       )}
     >
-      <span className={wrap ? "min-w-0 wrap-anywhere" : "truncate"}>{children}</span>
+      <span className={wrap ? "min-w-0 whitespace-pre-line wrap-anywhere" : "truncate"}>
+        {children}
+      </span>
     </p>
   );
 }

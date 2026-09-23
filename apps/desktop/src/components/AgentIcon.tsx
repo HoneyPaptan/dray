@@ -1,3 +1,5 @@
+import { Waypoints } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 import type { Harness } from "@/types/events";
 
@@ -134,6 +136,8 @@ export default function AgentIcon({
       return <GrokIcon className={className} />;
     case "opencode":
       return <OpencodeIcon className={className} />;
+    case "cline":
+      return <ClineIcon className={className} />;
     default:
       return <ClaudeIcon className={cn(brand && CLAUDE_RUST, className)} />;
   }
@@ -200,6 +204,42 @@ function OpencodeIcon({ className }: { className?: string }) {
   );
 }
 
+/// Cline's, drawn rather than traced: a robot's head, which is the shape its
+/// own mark is built on, at this size reduced to the two eyes and the antenna
+/// that make it readable at 14px. Stroked like the two beside it, so a row of
+/// marks reads as one set rather than as one logo among drawings.
+function ClineIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={cn("size-4 shrink-0", className)}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label="Cline"
+    >
+      <rect x="3" y="8" width="18" height="12" rx="3" />
+      <path d="M12 4v4" />
+      <circle cx="8.5" cy="14" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="15.5" cy="14" r="1.25" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/// OpenRouter's, drawn rather than traced from its wordmark.
+///
+/// Every other mark here is the vendor's own, taken from a press kit; OpenRouter
+/// publishes one this tree has no copy of, and an approximation of somebody's
+/// logo is worse than a glyph that never claimed to be one. What it has to say
+/// is "one key, many models", which is what the fan says — and lucide is already
+/// what the rest of the composer's chrome is drawn in.
+function OpenRouterIcon({ className }: { className?: string }) {
+  return <Waypoints className={cn("size-4 shrink-0", className)} aria-label="OpenRouter" />;
+}
+
 /// Codex's is OpenAI's — one vendor, one mark, whichever side of the menu
 /// names it.
 export function ProviderIcon({
@@ -214,6 +254,11 @@ export function ProviderIcon({
       return <OpenAiIcon className={className} />;
     case "grok":
       return <GrokIcon className={className} />;
+    case "openrouter":
+      return <OpenRouterIcon className={className} />;
+    // The bridge's own project, under the name pi registers it as.
+    case "opencode-cli":
+      return <OpencodeIcon className={className} />;
     default:
       return <VercelIcon className={className} />;
   }

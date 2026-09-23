@@ -17,6 +17,7 @@ import DocsPanel from "@/components/DocsPanel";
 import NoticeStack from "@/components/NoticeStack";
 import { WindowControls } from "@/components/WindowControls";
 import LinkDialog from "@/components/chat/LinkDialog";
+import FolderPickerDialog from "@/components/FolderPickerDialog";
 import QuitDialog from "@/components/QuitDialog";
 import SettingsDialog, { type SettingsTab } from "@/components/SettingsDialog";
 import WorktreeDialog, { type WorktreePrompt } from "@/components/WorktreeDialog";
@@ -27,12 +28,9 @@ import PlanPanel from "@/components/PlanPanel";
 import PrPanel from "@/components/PrPanel";
 import BrowserPane from "@/components/browser/BrowserPane";
 import {
-  clearOpenError,
   closeTab,
-  describePick,
   openInBrowser,
   setPendingTab,
-  setPickHandler,
   useBrowserTabs,
   usePendingTab,
 } from "@/lib/browser";
@@ -83,7 +81,7 @@ import AppShell from "@/components/layout/AppShell";
 import SessionHeader from "@/components/layout/SessionHeader";
 import { offersFast } from "@/lib/fastMode";
 import { nextEffort } from "@/components/composer/ModelSelector";
-import { nextHarness } from "@/lib/model";
+import { nextSlot } from "@/lib/model";
 import { cycledModels } from "@/lib/starredModels";
 import ViewTabs, { HAS_BROWSER, type ViewTab } from "@/components/layout/ViewTabs";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -156,7 +154,8 @@ function App() {
     seedFxModels,
     loadingModels,
     harness,
-    setHarness,
+    agentProvider,
+    setSlot,
     modelId,
     effort,
     fast,
@@ -1465,34 +1464,19 @@ function App() {
       }
       // The session is named outright: the read lands after an await, and by
       // then the reader may be on another session whose pane must stay put.
+      // A failed open brings the pane up too, where its own sentence says
+      // why — never the system browser, which on a phone is a browser on
+      // the wrong machine for a `localhost` link.
       void openInBrowser(selectedSessionId, url, true)
+        .catch(() => undefined)
         .then(() => {
           if (fullBrowserOpen) return;
           setPanelTab("browser", selectedSessionId);
           setPanelOpen(true, selectedSessionId);
-        })
-        .catch(() => {
-          // Answered by the system browser, so the pane has nothing to say.
-          clearOpenError(selectedSessionId);
-          void openUrl(url).catch(console.error);
         });
     });
     return () => setLinkOpener(null);
   }, [selectedSessionId, fullBrowserOpen, setPanelTab, setPanelOpen]);
-
-  // An element picked in the page lands in that session's draft, and the
-  // composer is brought on screen to show it — off the full view and onto
-  // Chat, since the composer is hidden there.
-  useEffect(() => {
-    setPickHandler((sessionId, element) => {
-      if (!element) return;
-      appendToDraft(sessionId, describePick(element));
-      if (sessionId !== selectedSessionId) return;
-      if (viewTab === "browser") setViewTab("chat");
-      focusComposer();
-    });
-    return () => setPickHandler(null);
-  }, [selectedSessionId, viewTab, setViewTab]);
 
   // The first browser tab appearing — an agent opening a page — brings the
   // pane up on Browser, once. Not while the full view is up, where the same
@@ -1990,7 +1974,7 @@ function App() {
   const composingNewSession = !selectedSessionId && !issuesOpen;
   // Steps the picker's own row in its own order, rather than toggling between
   // two — a toggle written when there were two silently never reached pi.
-  useHotkey("harness.next", () => setHarness(nextHarness(harness)), {
+  useHotkey("harness.next", () => setSlot(nextSlot(harness, agentProvider)), {
     enabled: composingNewSession,
   });
   useHotkey("worktree.toggle", () => setUseWorktree((v) => !v), {
@@ -2478,7 +2462,8 @@ function App() {
           toolbar={
             <ComposerToolbar
               harness={harness}
-              onHarnessChange={setHarness}
+              agentProvider={agentProvider}
+              onSlotChange={setSlot}
               models={models}
               modelId={modelId}
               effort={effort}
@@ -2673,6 +2658,7 @@ function App() {
     <DragGhost />
     <QuitDialog />
     <LinkDialog />
+    <FolderPickerDialog />
     {/* Mounted here rather than in the sidebar, which unmounts whole when it
         collapses and would take ⌘, with it. */}
     <SettingsDialog

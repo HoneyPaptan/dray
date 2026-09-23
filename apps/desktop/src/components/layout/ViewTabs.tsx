@@ -11,18 +11,11 @@ export type ViewTab = (typeof VIEW_TABS)[number];
 
 /// Whether this build has a browser behind that tab.
 ///
-/// The pane drew a native Chromium view, and that view left with CEF. The
-/// agent's half of the browser works on every platform — `dray browser` drives
-/// a Chromium Dray starts, over the DevTools protocol — but nothing paints a
-/// page into the window yet; the screencast that replaces the native view is
-/// the next piece of work.
-///
-/// **Hidden rather than drawn as an empty state, which reverses what the PR
-/// panel does one screen over.** That pane keeps its tab and explains itself
-/// because one `brew install` is the cure; here there is no cure to name, and a
-/// pane whose whole content is "not in this build" is a control that exists to
-/// say it does not work.
-export const HAS_BROWSER = false;
+/// It does again: the pane draws a screencast of the headless Chromium `dray
+/// browser` drives, so the same picture reaches the desktop window and a
+/// phone. Kept as a flag rather than deleted, since a build for a platform
+/// with no Chromium to start is the reason it existed.
+export const HAS_BROWSER = true;
 
 /// The tabs actually drawn, in order.
 const DRAWN_TABS = VIEW_TABS.filter((tab) => tab !== "browser" || HAS_BROWSER);

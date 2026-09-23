@@ -11,6 +11,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Reads the file the dialog picked. The WebView's own `<input type=file>`
+        // handed back blobs that were short — five screenshots reached the
+        // laptop truncated with nothing on the wire cutting them — where this
+        // opens the `content://` URI through the ContentResolver and streams
+        // the whole thing from Rust.
+        .plugin(tauri_plugin_fs::init())
         // The banner has to be posted by the process the reader is holding. The
         // desktop's own notifier runs where the runtime is, which on a phone is
         // somebody's laptop in another room.
