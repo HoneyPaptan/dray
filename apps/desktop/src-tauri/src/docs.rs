@@ -78,9 +78,20 @@ pub async fn save_doc(
     text: String,
     expect: Option<String>,
 ) -> Result<SaveOutcome, String> {
+    save_text(path, text, expect, MAX_DOC).await
+}
+
+/// The write both the Docs panel and the Files view make, parameterised by the
+/// cap each opens files under, so the stale check is stated once.
+pub(crate) async fn save_text(
+    path: String,
+    text: String,
+    expect: Option<String>,
+    cap: u64,
+) -> Result<SaveOutcome, String> {
     // Checked on the way in as well as on the way out, or a reader could paste
     // their way past the cap and save a file the panel then refuses to reopen.
-    if text.len() as u64 > MAX_DOC {
+    if text.len() as u64 > cap {
         return Err(TOO_LARGE.to_string());
     }
 
@@ -94,7 +105,7 @@ pub async fn save_doc(
     }
 
     if let Some(base) = expect {
-        let current = read_capped(&path, MAX_DOC).await?;
+        let current = read_capped(&path, cap).await?;
         if current != base.as_bytes() {
             return Ok(SaveOutcome::Stale);
         }

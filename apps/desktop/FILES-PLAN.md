@@ -1,7 +1,8 @@
 # The Files view
 
-A read-only file viewer as a fourth main-column tab: Chat, Diff, Browser,
-**Files**. A tree on one side, a tab strip and code pane on the other, the tree
+A file viewer and editor as a fourth main-column tab: Chat, Diff, Browser,
+**Files**. Read-only until 2026-09-24, when the code pane became a CodeMirror
+buffer; see "Editing" under the changelog in CLAUDE.md for the rules. A tree on one side, a tab strip and code pane on the other, the tree
 movable to the right and resizable, both remembered in local storage.
 
 Written against `main` at `664c586f`. Decisions taken with the reader on
@@ -228,11 +229,10 @@ and viewer as a fourth main tab"**.
 
 ## Not in this
 
-- **Search inside a file** — the code sits in a shadow root, so ⌘F finds
-  nothing there; a find bar is its own piece of work.
-- **Editing.** The Docs panel edits markdown because a doc is the reader's;
-  code is the agent's, and the view's whole promise is that it changes
-  nothing.
+- **Search inside a file** — CodeMirror's own ⌘F now answers while the editor
+  has focus; nothing app-level.
+- **Editing** shipped 2026-09-24 (was excluded on the reading that code is the
+  agent's). Honey's call: one place to browse, diff, run and write.
 - **Go to definition, symbols, minimap** — an IDE's, not a viewer's.
 - **Virtualised tree**, **persisted open tabs**, **close chord**, **quick-open
   chord** — each one small, each waiting for someone to miss it.

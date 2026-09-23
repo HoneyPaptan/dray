@@ -81,7 +81,7 @@ export const SHORTCUTS = [
   { id: "panel.tab.prev", label: "Previous panel tab", group: "Panels and views", chord: k("{", { shift: true, code: "BracketLeft" }) },
   { id: "panel.tab.next", label: "Next panel tab", group: "Panels and views", chord: k("}", { shift: true, code: "BracketRight" }) },
   { id: "panel.refresh", label: "Refresh panel", group: "Panels and views", chord: k("r") },
-  { id: "doc.save", label: "Save doc", group: "Panels and views", chord: k("s") },
+  { id: "doc.save", label: "Save file", group: "Panels and views", chord: k("s") },
   { id: "subtab.prev", label: "Previous tab in the view or panel", group: "Panels and views", chord: k("ArrowLeft", { shift: true }) },
   { id: "subtab.next", label: "Next tab in the view or panel", group: "Panels and views", chord: k("ArrowRight", { shift: true }) },
   { id: "view.chat", label: "Chat view", group: "Panels and views", chord: k("1", { alt: true, code: "Digit1" }) },

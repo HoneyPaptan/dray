@@ -48,6 +48,8 @@ export default function FileTabs({
             key={file.path}
             path={file.path}
             label={labels[i]}
+            dirty={file.state.status === "ready" && file.state.draft !== null}
+            stale={file.state.status === "ready" && file.state.stale}
             active={file.path === active}
             onSelect={() => onSelect(file.path)}
             onClose={() => onClose(file.path)}
@@ -62,12 +64,16 @@ export default function FileTabs({
 function Tab({
   path,
   label,
+  dirty,
+  stale,
   active,
   onSelect,
   onClose,
 }: {
   path: string;
   label: string;
+  dirty: boolean;
+  stale: boolean;
   active: boolean;
   onSelect: () => void;
   onClose: () => void;
@@ -114,6 +120,15 @@ function Tab({
     >
       <FileIcon path={path} className="size-3.5" />
       <span className="max-w-40 truncate">{label}</span>
+      {dirty && (
+        <span
+          aria-label={stale ? "Unsaved, and changed on disk" : "Unsaved"}
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            stale ? "bg-accent-command" : "bg-current",
+          )}
+        />
+      )}
       <Tooltip>
         <TooltipTrigger asChild>
           <button

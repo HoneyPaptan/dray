@@ -65,6 +65,7 @@ export default function FilesView({
   cwd,
   active,
   revision,
+  locked,
 }: {
   sessionId: string;
   cwd: string;
@@ -73,6 +74,8 @@ export default function FilesView({
   /// relisting the directory on every turn.
   active: boolean;
   revision: string;
+  /// True while the session's agent is mid-turn; the editor goes read-only.
+  locked: boolean;
 }) {
   const { open, active: activePath } = useOpenFiles(sessionId);
   useOpenFilesWatcher(sessionId);
@@ -288,7 +291,7 @@ export default function FilesView({
             }
           />
         )}
-        <FileViewer file={file} />
+        <FileViewer sessionId={sessionId} file={file} locked={locked} />
       </div>
     </div>
   );

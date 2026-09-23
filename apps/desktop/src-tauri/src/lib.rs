@@ -868,6 +868,7 @@ pub fn run() {
             files::search_files,
             files::list_dir,
             files::read_file,
+            files::save_file,
             store::list_session_index_items,
             store::get_session_by_id,
             projects::list_projects,

@@ -2,14 +2,28 @@ import { useEffect, useSyncExternalStore } from "react";
 
 import { call, subscribeEvent } from "@/lib/transport";
 
-import type { FileBody } from "@/types/events";
+import type { FileBody, SaveOutcome } from "@/types/events";
 
 /// A tagged union over the read, so there is no state in which a body exists
 /// beside an error explaining why it doesn't.
+///
+/// `draft` is the buffer where it differs from disk and `null` where it does
+/// not, so dirtiness is one null check. `stale` means the file moved on disk
+/// under a dirty buffer: the disk copy is in `body`, the reader's in `draft`,
+/// and nothing is written until they pick one.
 export type FileState =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; body: FileBody };
+  | {
+      status: "ready";
+      body: FileBody;
+      draft: string | null;
+      saving: boolean;
+      stale: boolean;
+      saveError: string | null;
+    };
+
+const CLEAN = { draft: null, saving: false, stale: false, saveError: null } as const;
 
 export type OpenFile = {
   /// Absolute. The tree opens files under the session's directory, and a chat
@@ -137,6 +151,13 @@ export function closeFile(sid: string | null, path: string) {
   const { open, active } = state(sid);
   const at = open.findIndex((file) => file.path === path);
   if (at === -1) return;
+  const closing = open[at];
+  if (closing.state.status === "ready" && closing.state.draft !== null) {
+    // A stale buffer stays open: closing it would throw away the only copy of
+    // the reader's edits with the strip that explains why still unanswered.
+    if (closing.state.stale) return;
+    void saveFile(sid, path);
+  }
   // A read still out for this path must not write into the store after the
   // reader has closed it.
   issue(sid, path);
@@ -158,7 +179,7 @@ function read(sid: string, path: string) {
   call<FileBody>("read_file", { path })
     .then((body) => {
       if (!current(sid, path, seq)) return;
-      patch(sid, path, (file) => ({ ...file, state: { status: "ready", body } }));
+      patch(sid, path, (file) => ({ ...file, state: adopt(file.state, body) }));
     })
     .catch((err) => {
       if (!current(sid, path, seq)) return;
@@ -167,6 +188,106 @@ function read(sid: string, path: string) {
         state: { status: "error", message: String(err) },
       }));
     });
+}
+
+/// A fresh disk read lands over the old one, and a dirty buffer survives it. A
+/// disk copy that now equals the draft means somebody saved the reader's own
+/// words, so the draft is dropped; one that differs marks the buffer stale
+/// rather than replacing what was typed.
+function adopt(prev: FileState, body: FileBody): FileState {
+  if (prev.status !== "ready" || prev.draft === null) {
+    return { status: "ready", body, ...CLEAN };
+  }
+  const text = body.kind === "text" ? body.text : null;
+  if (text === prev.draft) return { status: "ready", body, ...CLEAN };
+  const moved = prev.body.kind !== "text" || text !== prev.body.text;
+  return { ...prev, body, stale: prev.stale || moved };
+}
+
+function patchReady(
+  sid: string,
+  path: string,
+  next: (state: Extract<FileState, { status: "ready" }>) => FileState,
+) {
+  patch(sid, path, (file) =>
+    file.state.status === "ready" ? { ...file, state: next(file.state) } : file,
+  );
+}
+
+function find(sid: string, path: string): OpenFile | undefined {
+  return state(sid).open.find((file) => file.path === path);
+}
+
+export function isFileDirty(file: OpenFile): boolean {
+  return file.state.status === "ready" && file.state.draft !== null;
+}
+
+export function editFile(sid: string | null, path: string, text: string) {
+  if (!sid) return;
+  patchReady(sid, path, (ready) => {
+    if (ready.body.kind !== "text") return ready;
+    const draft = text === ready.body.text ? null : text;
+    return { ...ready, draft, stale: draft !== null && ready.stale };
+  });
+}
+
+/// `expect` is the disk text the buffer was opened on, so a file that moved
+/// answers `stale` with nothing written; `force` is the reader's own overwrite.
+export async function saveFile(
+  sid: string | null,
+  path: string,
+  { force = false }: { force?: boolean } = {},
+): Promise<SaveOutcome | null> {
+  if (!sid) return null;
+  const file = find(sid, path);
+  if (file?.state.status !== "ready" || file.state.body.kind !== "text") return null;
+  const { draft, saving, stale, body } = file.state;
+  if (draft === null || saving) return null;
+  if (stale && !force) return "stale";
+
+  const expect = force ? null : body.text;
+  const seq = issue(sid, path);
+  patchReady(sid, path, (ready) => ({ ...ready, saving: true, saveError: null }));
+
+  try {
+    const outcome = await call<SaveOutcome>("save_file", { path, text: draft, expect });
+    if (!current(sid, path, seq)) return null;
+    patchReady(sid, path, (ready) =>
+      outcome === "stale"
+        ? { ...ready, saving: false, stale: true }
+        : { status: "ready", body: { kind: "text", text: draft }, ...CLEAN },
+    );
+    return outcome;
+  } catch (err) {
+    if (!current(sid, path, seq)) return null;
+    patchReady(sid, path, (ready) => ({ ...ready, saving: false, saveError: String(err) }));
+    return null;
+  }
+}
+
+/// The blur save. Refuses a stale buffer, since writing over a file that moved
+/// is the one thing autosave must never decide on its own.
+export function autosaveFile(sid: string | null, path: string) {
+  if (!sid) return;
+  const file = find(sid, path);
+  if (!file || file.state.status !== "ready" || file.state.draft === null) return;
+  if (file.state.stale) return;
+  void saveFile(sid, path);
+}
+
+export function saveActiveFile(sid: string | null) {
+  if (!sid) return;
+  const { active } = state(sid);
+  if (!active) return;
+  const file = find(sid, active);
+  if (!file || !isFileDirty(file)) return;
+  void saveFile(sid, active);
+}
+
+export function reloadFile(sid: string | null, path: string) {
+  if (!sid) return;
+  patchReady(sid, path, (ready) => ({ ...ready, ...CLEAN }));
+  read(sid, path);
 }
 
 /// Re-reads every open file. What the turn ending and the header's refresh

@@ -36,7 +36,7 @@ use tokio::{io::AsyncWriteExt, process::Command};
 use ts_rs::TS;
 
 use crate::attachments::{image_mime, MAX_IMAGE_BYTES};
-use crate::docs::{read_capped, TOO_LARGE};
+use crate::docs::{read_capped, save_text, SaveOutcome, TOO_LARGE};
 use crate::Fail;
 
 /// One row in the picker. `path` is relative to the indexed directory, which is
@@ -418,6 +418,21 @@ pub async fn read_file(path: String) -> Result<FileBody, String> {
         .map_err(|_| "Not text — nothing to show.".to_string())
 }
 
+/// Writes a file the view has open, refusing to clobber one that moved on disk.
+///
+/// `save_doc` at the view's own cap: `expect` is the text the buffer was opened
+/// on and a mismatch answers `Stale` with nothing written, `None` is the
+/// reader's own overwrite. The check is a check and not a lock, for the reason
+/// `save_text` records.
+#[tauri::command]
+pub async fn save_file(
+    path: String,
+    text: String,
+    expect: Option<String>,
+) -> Result<SaveOutcome, String> {
+    save_text(path, text, expect, MAX_FILE).await
+}
+
 /// The image types this view draws.
 ///
 /// [`image_mime`]'s table is the *model's* — what the API accepts as an image
@@ -669,6 +684,44 @@ mod tests {
         std::fs::write(&path, [0xff, 0xfe, 0x00]).unwrap();
 
         assert!(read_file(path.to_str().unwrap().into()).await.is_err());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn save_file_writes_and_refuses_a_moved_file() {
+        let dir = scratch();
+        let path = dir.join("main.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+
+        let saved = save_file(
+            path.to_string_lossy().into_owned(),
+            "fn main() { run() }\n".into(),
+            Some("fn main() {}\n".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved, SaveOutcome::Saved);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() { run() }\n");
+
+        let stale = save_file(
+            path.to_string_lossy().into_owned(),
+            "other".into(),
+            Some("fn main() {}\n".into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(stale, SaveOutcome::Stale);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn main() { run() }\n");
+
+        let forced = save_file(path.to_string_lossy().into_owned(), "other".into(), None)
+            .await
+            .unwrap();
+        assert_eq!(forced, SaveOutcome::Saved);
+
+        let missing = save_file(dir.join("nope.rs").to_string_lossy().into_owned(), "x".into(), None).await;
+        assert!(missing.is_err());
+        assert!(!dir.join("nope.rs").exists());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
