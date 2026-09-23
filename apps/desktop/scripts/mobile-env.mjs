@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +24,15 @@ function token() {
   }
 }
 
+// The mode rides the create, the same reading `~/.dray/remote-token`'s own
+// write takes: this file carries that token, and `writeFileSync` leaves an
+// existing file's mode alone, so a previously world-readable copy is removed
+// rather than written over.
+function writeOwnerOnly(contents) {
+  rmSync(OUT, { force: true });
+  writeFileSync(OUT, contents, { mode: 0o600 });
+}
+
 // The same variable `serve.rs` reads, so the baked port cannot drift from the
 // one the desktop listens on.
 const port = process.env.DRAY_SERVE_PORT ?? "8787";
@@ -33,10 +42,10 @@ const secret = token();
 if (!address || !secret) {
   // Written empty rather than left stale: a build made on a machine with no
   // tailnet or no token must not ship the previous machine's endpoint.
-  writeFileSync(OUT, "");
+  writeOwnerOnly("");
   const missing = !address ? "no tailnet address" : "no ~/.dray/remote-token";
   console.warn(`[mobile-env] ${missing}, so the app will ask for a host on first run`);
 } else {
-  writeFileSync(OUT, `VITE_DRAY_URL=ws://${address}:${port}\nVITE_DRAY_TOKEN=${secret}\n`);
+  writeOwnerOnly(`VITE_DRAY_URL=ws://${address}:${port}\nVITE_DRAY_TOKEN=${secret}\n`);
   console.log(`[mobile-env] baked ws://${address}:${port}`);
 }
