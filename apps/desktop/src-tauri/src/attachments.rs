@@ -8,6 +8,7 @@
 //! itself, and injects it before the model turn, so a 40MB CSV costs a path
 //! rather than a context window. That means a non-image attachment needs no
 //! wire surface at all: it is prompt text by the time it leaves here.
+use serde_json::{json, Value};
 use anyhow::{Context, Result};
 use crate::harness::Harness;
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -95,6 +96,23 @@ pub struct PreparedImage {
     pub stored_path: String,
     pub mime_type: String,
     pub data: String,
+}
+
+/// The `prompt` array an ACP `session/prompt` takes: the text, then one
+/// `{type:"image", mimeType, data}` block per picture. Stated once for every
+/// ACP harness that accepts images, or one of them silently drops the pictures
+/// the composer let the reader attach — which is exactly how opencode and
+/// Cline shipped, drawing the thumbnail in the bubble and sending text alone.
+pub fn acp_prompt_blocks(text: &str, images: &[PreparedImage]) -> Value {
+    let mut blocks = vec![json!({"type": "text", "text": text})];
+    for image in images {
+        blocks.push(json!({
+            "type": "image",
+            "mimeType": image.mime_type,
+            "data": image.data,
+        }));
+    }
+    Value::Array(blocks)
 }
 
 /// The prompt as the CLI should see it, with everything attached folded in.
@@ -625,5 +643,23 @@ mod archive_tests {
         assert_eq!(named_for_bytes("shot.jpeg".into(), &png), "shot.jpeg");
         assert_eq!(named_for_bytes("notes.txt".into(), &jpeg), "notes.txt");
         assert_eq!(named_for_bytes("blob".into(), b"hello"), "blob");
+    }
+
+    #[test]
+    fn acp_prompt_blocks_carry_each_image_after_the_text() {
+        let images = vec![PreparedImage {
+            stored_path: "/tmp/a.png".into(),
+            mime_type: "image/png".into(),
+            data: "aGk=".into(),
+        }];
+        let blocks = acp_prompt_blocks("look", &images);
+        assert_eq!(
+            blocks,
+            serde_json::json!([
+                {"type": "text", "text": "look"},
+                {"type": "image", "mimeType": "image/png", "data": "aGk="},
+            ])
+        );
+        assert_eq!(acp_prompt_blocks("plain", &[]).as_array().unwrap().len(), 1);
     }
 }

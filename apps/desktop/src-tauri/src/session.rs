@@ -1620,15 +1620,21 @@ impl Transport {
     /// Stated once because the queue path and the ordinary send path both need
     /// it, and a harness added to one and not the other reads as correct in
     /// both — the same trap `title_command`'s one match exists to close.
-    pub async fn open_turn(&self, text: &str) -> Option<Result<()>> {
+    pub async fn open_turn(
+        &self,
+        text: &str,
+        images: &[attachments::PreparedImage],
+    ) -> Option<Result<()>> {
         match self {
             Transport::Fx(session) => Some(crate::harness::fx::start_turn(session, text).await),
             Transport::Grok(session) => Some(crate::harness::grok::start_turn(session, text).await),
+            // fx and grok refuse image prompts on their handshake, so the tray never
+            // offers one there and nothing is dropped by passing text alone.
             Transport::Opencode(session) => {
-                Some(crate::harness::opencode::start_turn(session, text).await)
+                Some(crate::harness::opencode::start_turn(session, text, images).await)
             }
             Transport::Cline(session) => {
-                Some(crate::harness::cline::start_turn(session, text).await)
+                Some(crate::harness::cline::start_turn(session, text, images).await)
             }
             _ => None,
         }
@@ -2682,7 +2688,7 @@ async fn deliver_prompt(
     events: &Arc<Mutex<Vec<AgentEvent>>>,
     transport: &Transport,
     app: &AppHandle,
-) -> Result<String> {
+) -> Result<attachments::Prepared> {
     let seq = seq.fetch_add(1, Relaxed);
 
     // Ahead of the event, because it is what decides the event's own text:
@@ -2744,9 +2750,14 @@ async fn deliver_prompt(
 
     append_session_event(session_id, agent_event).await?;
 
+    // The images ride back out with the text so a held prompt can still carry
+    // them at the flush: `open_turn` there runs long after this returns.
+    let delivered = attachments::Prepared { text, images: prepared.images };
+    let text = &delivered.text;
+
     // Logged, not sent: the caller holds the text and opens the turn itself.
     if !send {
-        return Ok(text);
+        return Ok(delivered);
     }
 
     // Codex takes a prompt as a request that opens a turn, so the write is the
@@ -2755,35 +2766,35 @@ async fn deliver_prompt(
     // Its input was built above, where a failure could still be a no-op.
     if let Some((thread, input)) = codex {
         crate::harness::codex::start_turn(thread, input).await?;
-        return Ok(text);
+        return Ok(delivered);
     }
     // pi takes a prompt as a command whose answer says it was accepted, so the
     // write is the send rather than a line the child picks up on its own
     // schedule.
     if let Transport::Pi(client) = transport {
-        crate::harness::pi::send_prompt(client, &text, delivery, &prepared.images).await?;
-        return Ok(text);
+        crate::harness::pi::send_prompt(client, text, delivery, &delivered.images).await?;
+        return Ok(delivered);
     }
     // fx takes a prompt as a request that blocks for the turn, so the write
-    // is the send and the reader settles the answer. Images not wired: the
-    // Codex provider answered `refused` to one on capture.
-    if let Some(sent) = transport.open_turn(&text).await {
+    // is the send and the reader settles the answer. opencode and Cline take
+    // the images as ACP blocks; fx and grok refuse them on the handshake.
+    if let Some(sent) = transport.open_turn(text, &delivered.images).await {
         sent?;
-        return Ok(text);
+        return Ok(delivered);
     }
     let stdin = transport.lines()?;
 
     // A bare string is the whole content when nothing is attached — the
     // shape every fixture captures, kept rather than always sending the
     // one-element block array it is sugar for.
-    let content = if prepared.images.is_empty() {
+    let content = if delivered.images.is_empty() {
         json!(text)
     } else {
         let mut blocks = Vec::new();
         if !text.is_empty() {
             blocks.push(json!({"type": "text", "text": text}));
         }
-        for image in &prepared.images {
+        for image in &delivered.images {
             blocks.push(json!({
                 "type": "image",
                 "source": {
@@ -2798,7 +2809,7 @@ async fn deliver_prompt(
 
     let line = json!({"type":"user","message":{"role":"user","content": content}});
     write_line(stdin, &line).await?;
-    Ok(text)
+    Ok(delivered)
 }
 
 /// The handles a read loop needs once its harness has stopped being relevant.
@@ -3151,6 +3162,7 @@ async fn flush_one_per_turn(
         // The text comes back prepared — a non-image attachment is an `@path` on
         // it by now — which is what may be joined.
         let mut texts = Vec::new();
+        let mut images = Vec::new();
         for message in batch {
             match deliver_prompt(
                 session_id,
@@ -3171,7 +3183,10 @@ async fn flush_one_per_turn(
             )
             .await
             {
-                Ok(text) => texts.push(text),
+                Ok(delivered) => {
+                    texts.push(delivered.text);
+                    images.extend(delivered.images);
+                }
                 Err(err) => {
                     eprintln!("[queued flush err] {err}");
                     report_send_failure(session_id, harness, &err.to_string(), seq, events, app)
@@ -3186,7 +3201,7 @@ async fn flush_one_per_turn(
         // so the sentence saying why is the only thing still owing.
         if let (false, Some(sent)) = (
             texts.is_empty(),
-            transport.open_turn(&texts.join("\n\n")).await,
+            transport.open_turn(&texts.join("\n\n"), &images).await,
         ) {
             match sent {
                 Ok(()) => return,

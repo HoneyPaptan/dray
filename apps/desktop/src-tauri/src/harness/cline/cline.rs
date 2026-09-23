@@ -445,7 +445,11 @@ pub(crate) fn preamble_block() -> String {
 /// Only the *transport* text carries the rules: [`crate::session`] logs
 /// `user_message` from the reader's own string, so the transcript never sees
 /// the block and there is nothing to strip on the way out.
-pub async fn start_turn(session: &ClineSession, text: &str) -> Result<()> {
+pub async fn start_turn(
+    session: &ClineSession,
+    text: &str,
+    images: &[crate::attachments::PreparedImage],
+) -> Result<()> {
     // Read, not taken: a send that fails hands the line to nobody, and the
     // reader's retry is then a turn that never learns the rules.
     let owed = session.preamble.load(std::sync::atomic::Ordering::Relaxed);
@@ -463,7 +467,7 @@ pub async fn start_turn(session: &ClineSession, text: &str) -> Result<()> {
         "session/prompt",
         json!({
             "sessionId": session.id,
-            "prompt": [{"type": "text", "text": sent}],
+            "prompt": crate::attachments::acp_prompt_blocks(&sent, images),
         }),
     )?;
     *running = Some(id);
